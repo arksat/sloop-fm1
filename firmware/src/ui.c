@@ -6,6 +6,7 @@
 #define FELUCCA_VERSION "SLOOP 2.6"  /* the beat machine firmware for the FM-1 (based on Felucca) */
 #endif
 static void project_save(uint32_t slot);
+static void drum_grid_open(void);
 static void arrangement_save(void);
 static void panel_setup(void);
 static void project_load(uint32_t slot);
@@ -63,6 +64,7 @@ static struct {
     uint8_t confirm;             /* 1 = "clear the sequence?" (REC held on SEQ / ARP), 2 = "clear track n?" (TRACKS) */
     uint8_t confirm_trk;         /* the track the dialog clears */
     uint8_t uslot;               /* SAVE > USER: the selected user preset slot */
+    uint8_t pcat;                /* SAVE > PRESETS category */
     /* layers (ui_layers.c): a function button held, the keys and knobs do something else */
     uint8_t layer;               /* the layer drawn (LY_*), LY_PLAY = none */
     uint8_t layer_btn;           /* its button (B_*), NB = none */
@@ -292,6 +294,16 @@ static void open_family(uint32_t fam)
     page_entered();
 }
 
+/* SAVE always opens its first page: the sound browser, not the last SAVE page visited. */
+static void presets_open(void)
+{
+    ui.page = (uint8_t)page_first(FAM_SAVE);
+    ui.fam_last[FAM_SAVE] = ui.page;
+    ui.pcat = 0;                                    /* ALL: show this track's sound, not a stale filter */
+    ui.home = 0;
+    page_entered();
+}
+
 /* SELECT on a page: the previous / next page of its family, as tapping the button again but both ways,
  * stopping at the ends. Not the screens of their own (SONG, DRUMS) nor a family of one page (TRACKS):
  * 0 then, and SELECT is the tempo there */
@@ -507,6 +519,10 @@ static const struct { uint8_t kind, e; const char *name; } BANK[] = {
 #endif
 };
 #define NBANK (sizeof BANK / sizeof BANK[0])
+enum {PC_ALL, PC_FAV, PC_BASS, PC_KEYS, PC_PAD, PC_LEAD, PC_FX, PC_ORGAN, PC_PLUCK, PC_STAB, PC_USER, PC_COUNT};
+static const char *const PRESET_CAT[PC_COUNT] = {"ALL", "FAV", "BASS", "KEY", "PAD", "LEAD", "FX", "ORGN", "PLCK", "STAB", "USER"};
+static uint8_t preset_fav[(NBANK + UP_SLOTS + 7u) / 8u];
+static uint8_t kit_fav[(DRUM_KITS + 7u) / 8u];
 static uint8_t bank_pi[NBANK];                       /* the preset index of each entry in its engine */
 static uint8_t bank_ready;
 static void bank_resolve(void)
@@ -548,6 +564,107 @@ static uint32_t preset_at(uint32_t n, uint32_t *k)
     return BANK[n].e;
 }
 static const char *preset_kind(uint32_t n) { return n < NBANK ? BANK_KIND[BANK[n].kind] : "USER"; }
+static void preset_go(uint32_t n);
+static uint32_t preset_fav_id(uint32_t n, uint32_t k) { return n < NBANK ? n : NBANK + k; }
+static int preset_is_fav(uint32_t n)
+{
+    uint32_t k, id;
+    preset_at(n, &k);
+    id = preset_fav_id(n, k);
+    return (preset_fav[id >> 3] >> (id & 7u)) & 1u;
+}
+static int preset_matches(uint32_t n)
+{
+    uint32_t k, e;
+    if (ui.pcat == PC_FAV)
+        return preset_is_fav(n);
+    if (ui.pcat == PC_ALL)
+        return 1;
+    e = preset_at(n, &k);
+    if (ui.pcat == PC_USER)
+        return e == NENGINES;
+    if (e == NENGINES)
+        return 0;
+    switch (ui.pcat) {
+    case PC_BASS: return BANK[n].kind == BK_BASS;
+    case PC_KEYS: return BANK[n].kind == BK_KEYS;
+    case PC_PAD: return BANK[n].kind == BK_PAD;
+    case PC_LEAD: return BANK[n].kind == BK_LEAD;
+    case PC_FX: return BANK[n].kind == BK_FX;
+    case PC_ORGAN: return BANK[n].kind == BK_ORGAN;
+    case PC_PLUCK: return BANK[n].kind == BK_PLUCK;
+    case PC_STAB: return BANK[n].kind == BK_STAB;
+    default: return 0;
+    }
+}
+static uint32_t preset_view_count(void)
+{
+    uint32_t n, total, count = 0;
+    (void)preset_pos(&total);
+    for (n = 0; n < total; n++) if (preset_matches(n)) count++;
+    return count;
+}
+static uint32_t preset_view_at(uint32_t pos)
+{
+    uint32_t n, total;
+    (void)preset_pos(&total);
+    for (n = 0; n < total; n++) if (preset_matches(n) && !pos--) return n;
+    return 0;
+}
+static uint32_t preset_view_pos(uint32_t base)
+{
+    uint32_t n, total, pos = 0;
+    (void)preset_pos(&total);
+    for (n = 0; n < total; n++) if (preset_matches(n)) {
+        if (n == base) return pos;
+        pos++;
+    }
+    return 0;
+}
+static void preset_category_turn(int32_t steps)
+{
+    uint32_t total;
+    uint8_t to = (uint8_t)clamp((int32_t)ui.pcat + steps, 0, PC_COUNT - 1);
+    if (to == ui.pcat)
+        return;                                         /* category endpoints: no wraparound */
+    ui.pcat = to;
+    total = preset_view_count();
+    if (total)
+        preset_go(preset_view_at(0));
+    ui.force = 1;
+}
+static void preset_fav_toggle(void)
+{
+    uint32_t total, n = preset_pos(&total), k, id;
+    if (!total) return;
+    preset_at(n, &k);
+    id = preset_fav_id(n, k);
+    preset_fav[id >> 3] ^= (uint8_t)(1u << (id & 7u));
+    ui.force = 1;
+}
+static int kit_is_fav(uint32_t k) { return (kit_fav[k >> 3] >> (k & 7u)) & 1u; }
+static void kit_fav_toggle(uint32_t k) { kit_fav[k >> 3] ^= (uint8_t)(1u << (k & 7u)); ui.force = 1; }
+static uint32_t kit_view_count(void)
+{
+    uint32_t k, n = 0;
+    for (k = 0; k < DRUM_KITS; k++) if (ui.pcat != PC_FAV || kit_is_fav(k)) n++;
+    return n;
+}
+static uint32_t kit_view_at(uint32_t pos)
+{
+    uint32_t k;
+    for (k = 0; k < DRUM_KITS; k++) if ((ui.pcat != PC_FAV || kit_is_fav(k)) && !pos--) return k;
+    return 0;
+}
+static uint32_t kit_view_pos(uint32_t kit)
+{
+    uint32_t k, pos = 0;
+    for (k = 0; k < DRUM_KITS; k++) if (ui.pcat != PC_FAV || kit_is_fav(k)) {
+        if (k == kit) return pos;
+        pos++;
+    }
+    return 0;
+}
 
 /* list index n into track t (2.6: MIDI Program Change, any track); 0 done, 1 no such sound */
 static int preset_go_to(track_t *t, uint32_t n)
@@ -637,6 +754,7 @@ static const param_desc_t *home_param(uint32_t k, int16_t **vp)
 /* select track i (KNOB 1 on TRACKS, the editor): its sound, pages and pattern from now on */
 static void track_select(uint32_t i)
 {
+    uint32_t from_seq_roll = !ui.home && cur_page()->scope == SC_STEP;
     if (i >= NTRK || i == song.sel)
         return;
     song.sel = (uint8_t)i;
@@ -646,6 +764,9 @@ static void track_select(uint32_t i)
     ui.bank = 0;
     sync_reload = 1;
     ui.force = 1;
+    if (from_seq_roll && i == TRK_DRUM) {             /* STEP's piano roll becomes the drum editor */
+        drum_grid_open();                              /* always arrive at its GRID, not the kit page */
+    }
 }
 
 /* ------------------------------------------------------- MIDI LEARN --- */

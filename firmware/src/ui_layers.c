@@ -29,7 +29,7 @@ static uint32_t sec_armed_ms;
 static uint8_t chain_tap[CHAIN_MAX], chain_taps;        /* the section keys tapped in this SAVE hold (the first
                                                          * is asked for at once; two or more: a chain on release) */
 #define TAP_MS 450u                                     /* a press shorter than this, untouched: a tap */
-#define SHOW_MS 140u                                    /* the layer shows after this (a tap does not flash it) */
+#define SHOW_MS 300u                                    /* the layer shows after this (a tap does not flash it) */
 
 /* the ISR's view of the panel: the layers' buttons, OCT- / OCT+, REC / PLAY of a free take */
 static void layers_init(void)
@@ -586,11 +586,23 @@ static void tiles_draw(const tile_t *tl, uint32_t *cache)
         for (c = 0; c < 4u; c++) {
             const tile_t *t = &tl[r * 4u + c];
             int32_t x = 2 + (int32_t)c * 60;
+            const char *br = t->lab;
             uint32_t m;
             cv_rect(x, 2, 56, 32, t->bg);
             if (t->top)
                 cv_rect(x, 2, 56, 3, t->top);
-            te_text_c(x + 28, 9, t->lab, t->fg);
+            while (*br && *br != '\n') br++;
+            if (*br) {                                 /* a compact two-line key label, e.g. LOAD / A */
+                char upper[8], lower[8];
+                uint32_t n = (uint32_t)(br - t->lab);
+                memcpy(upper, t->lab, n);
+                upper[n] = 0;
+                str_cpy(lower, br + 1, sizeof lower);
+                te_text_c(x + 28, 3, upper, t->fg);
+                te_text_c(x + 28, 19, lower, t->fg);
+            } else {
+                te_text_c(x + 28, 9, t->lab, t->fg);
+            }
             for (m = 0; m < t->marks; m++)
                 cv_rect(x + 22 + (int32_t)m * 5, 27, 3, 3, t->fg);
             if (t->tag)
@@ -986,7 +998,8 @@ static void layer_screen_draw(void)
             int used = (ready >> i) & 1u, playing = live_sec == (int8_t)i && !arrangement_clock.running;
             int next = live_req == (int8_t)i ||
                        (chain_n && live_req < 0 && (chain_sec[((chain_i + 1u) % chain_n) % CHAIN_MAX] & 3u) == i);
-            str_cpy(tl[i].lab, SL[i], 8);
+            str_cpy(tl[i].lab, "load\nA", 8);
+            tl[i].lab[5] = (char)('A' + i);
             tl[i].bg = used ? (playing ? TE_COL[i] : TE_DIM[i]) : TE_G1;
             tl[i].fg = used ? C_BLACK : TE_G3;
             tl[i].top = next ? C_WHITE : 0;

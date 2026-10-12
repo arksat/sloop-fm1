@@ -397,12 +397,32 @@ static void edit_param(uint32_t slot, int32_t steps)
         return;
     }
     if (pg->graph == GR_BROWSE) {                         /* KNOB 1: one preset, KNOB 2: the next / previous engine */
-        if (slot == 0u && !is_drum(TSEL)) {
-            uint32_t total, cur = preset_pos(&total);
+        if (slot == 0u && is_drum(TSEL)) {
+            uint32_t total = kit_view_count(), cur = kit_view_pos((uint32_t)TDRUM->p[P_E0]);
             if (total)
-                preset_go((uint32_t)(((int32_t)cur + steps % (int32_t)total + (int32_t)total) % (int32_t)total));
+                TDRUM->p[P_E0] = (int16_t)kit_view_at((uint32_t)(((int32_t)cur + steps % (int32_t)total + (int32_t)total) % (int32_t)total));
+            ui.force = 1;
+        } else if (slot == 0u && !is_drum(TSEL)) {
+            uint32_t total = preset_view_count(), cur, n;
+            uint32_t base = preset_pos(&n);
+            cur = preset_view_pos(base);
+            if (total)
+                preset_go(preset_view_at((uint32_t)(((int32_t)cur + steps % (int32_t)total + (int32_t)total) % (int32_t)total)));
         } else if (slot == 1u && !is_drum(TSEL)) {
             select_engine((TSEL->eng_req + (steps > 0 ? 1u : NENGINES - 1u)) % NENGINES);
+        } else if (slot == 2u && !is_drum(TSEL)) {
+            preset_category_turn(steps);
+        } else if (slot == 3u && !is_drum(TSEL) && steps) {
+            preset_fav_toggle();
+        } else if (slot == 2u && is_drum(TSEL) && steps) {
+            ui.pcat = steps > 0 ? PC_FAV : PC_ALL;
+            if (kit_view_count())
+                TDRUM->p[P_E0] = (int16_t)kit_view_at(0);
+            else
+                ui.pcat = PC_ALL;                       /* an empty FAV filter stays useful */
+            ui.force = 1;
+        } else if (slot == 3u && is_drum(TSEL) && steps) {
+            kit_fav_toggle((uint32_t)TDRUM->p[P_E0]);
         }
         return;
     }
@@ -679,15 +699,11 @@ static void layer_tap(uint32_t layer)
     case LY_MIX:
         open_family(FAM_GLO);
         break;
-    case LY_SONG:                                         /* SAVE tapped: TRACKS -> the song, else the SAVE pages */
-        if (on_song_page())
-            arrangement_save();
-        else if (!ui.home && cur_page()->scope == SC_TRK)
-            studio_open(SC_SONG);
-        else if (on_drum_page())
-            studio_open(SC_SONG);
-        else
+    case LY_SONG:
+        if (!ui.home && cur_page()->fam == FAM_SAVE)      /* already in SAVE: its normal 1/4 -> 2/4 page walk */
             open_family(FAM_SAVE);
+        else                                              /* every other screen starts at the sound browser */
+            presets_open();
         break;
     default:
         break;
@@ -1061,11 +1077,20 @@ static void ui_input(void)
         /* PRESETS browses the selected part's presets (all engines, then user presets) on HOME, the PRESETS
          * page and TRACKS only (the drum track: its kits); elsewhere a stray turn would throw away the sound
          * being edited. Every detent counts */
-        uint32_t total, cur = preset_pos(&total);
+        uint32_t total, cur;
         if (is_drum(TSEL))
             TDRUM->p[P_E0] = (int16_t)clamp(TDRUM->p[P_E0] + s, 0, DRUM_KITS - 1);
-        else if (total)
-            preset_go((uint32_t)(((int32_t)cur + s % (int32_t)total + (int32_t)total) % (int32_t)total));
+        else if (cur_page()->graph == GR_BROWSE) {
+            uint32_t base = preset_pos(&cur);
+            total = preset_view_count();
+            cur = preset_view_pos(base);
+            if (total)
+                preset_go(preset_view_at((uint32_t)(((int32_t)cur + s % (int32_t)total + (int32_t)total) % (int32_t)total)));
+        } else {
+            cur = preset_pos(&total);
+            if (total)
+                preset_go((uint32_t)(((int32_t)cur + s % (int32_t)total + (int32_t)total) % (int32_t)total));
+        }
     }
     if ((s = panel_enc(EN_ALGO)) != 0 && !ft_on)     /* ALGORITHM: the selected track, on every page (not in a take) */
         track_select((uint32_t)clamp((int32_t)song.sel + (s > 0 ? 1 : -1), 0, NTRK - 1));

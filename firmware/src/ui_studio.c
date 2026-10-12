@@ -115,6 +115,11 @@ static void studio_open(uint32_t scope)
         ui.msg_t = 0; ui.entry_open = 0; return;
     }
 }
+static void drum_grid_open(void)
+{
+    drum_page = 0;
+    studio_open(SC_DRUM);
+}
 /* LIVE: REC, on any page. One record arm, on the selected track (it follows ALGORITHM). No
  * click (seq.c): playing, recording starts at once; stopped, REC arms and the first note
  * starts the loop (or, in an empty project, a free take that REC closes: seq.c ft_close).
@@ -218,8 +223,15 @@ static void studio_tracks_draw(void)
             te_lower(e, ENGINES[t->eng_req % NENGINES]->name, sizeof e);
         }
         b[13] = 0;
+        {   /* larger sound name at left; the engine owns the right edge (or the space before a status tag) */
+            int32_t eright = (rec || solo || silent) ? 196 : 236;
+            int32_t ex = eright - text_w(&FONT_S, e), max_name = ex - 40;
+            while (b[0] && text_w_scaled(&FONT_S, b, 3, 2) > max_name)
+                b[str_len(b) - 1u] = 0;
+        }
         h = studio_hash(selected + level * 7u + silent * 997u + rec * 1999u + solo * 4999u + len * 37u +
                         song.playing * 7u + pos * 71u + bank * 13u, b);
+        h = studio_hash(h, e);
         for (j = 0; j < len; j++) h = h * 31u + (uint32_t)trk_step_on(t, j);
         if (!ui.force && h == rows[i]) continue;
         rows[i] = h;
@@ -229,9 +241,11 @@ static void studio_tracks_draw(void)
             char n[2] = {(char)('1' + i), 0};
             cv_text(11, 10, &FONT_S, n, selected ? C_BLACK : col);
         }
-        cv_text(34, 1, &FONT_S, b, selected ? C_WHITE : TE_G4);
-        if (34 + text_w(&FONT_S, b) + 6 + text_w(&FONT_S, e) < 196)
-            cv_text(34 + text_w(&FONT_S, b) + 6, 1, &FONT_S, e, selected ? col : TE_G3);
+        cv_text_scaled(34, 0, &FONT_S, b, selected ? C_WHITE : TE_G4, 3, 2);
+        {
+            int32_t eright = (rec || solo || silent) ? 196 : 236;
+            cv_text(eright - text_w(&FONT_S, e), 3, &FONT_S, e, selected ? col : TE_G3);
+        }
         if (rec) {
             cv_rect(200, 2, 36, 15, TE_RED);
             cv_text(206, 1, &FONT_S, "rec", C_WHITE);
@@ -254,16 +268,16 @@ static void studio_tracks_draw(void)
                     for (k = a; k < z; k++) if (trk_step_on(t, k)) on = 2;
                 }
             }
-            cv_rect(34 + (int32_t)j * 10, 21, 8, 9,
+            cv_rect(34 + (int32_t)j * 10, 28, 8, 5,
                     !on ? C_BLACK : on == 2u ? (silent ? TE_G3 : selected ? col : dim) : TE_G1);
             if (on == 2u && !selected && !silent)
-                cv_rect(34 + (int32_t)j * 10, 21, 8, 2, col);
+                cv_rect(34 + (int32_t)j * 10, 28, 8, 1, col);
             if (song.playing && p == pos)
-                cv_rect(34 + (int32_t)j * 10, 31, 8, 2, C_WHITE);
+                cv_rect(34 + (int32_t)j * 10, 34, 8, 2, C_WHITE);
         }
-        cv_rect(198, 23, 38, 5, TE_G1);                /* the level */
+        cv_rect(198, 28, 38, 5, TE_G1);                /* aligned with the step tiles */
         if (!silent)
-            cv_rect(198, 23, (int32_t)level * 38 / 127, 5, selected ? col : TE_G3);
+            cv_rect(198, 28, (int32_t)level * 38 / 127, 5, selected ? col : dim);
         cv_blit(0, 40 + i * 36);
     }
     {   /* KNOB 1 swing (the global groove), 2 level, 3 steps, 4 pan of the selected track */
@@ -518,7 +532,7 @@ static void drum_screen_input(uint32_t pressed, uint32_t home)
     if ((s = panel_enc(EN_ALGO)) && !ft_on) {
         track_select((uint32_t)clamp((int32_t)song.sel + s, 0, 3));
         if (song.sel != TRK_DRUM) {
-            go_home();
+            studio_open(SC_STEP);                     /* back to the synth piano roll */
             return;
         }
     }

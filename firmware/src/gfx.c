@@ -171,6 +171,51 @@ static int32_t cv_text(int32_t x, int32_t y, const felucca_font_t *f, const char
     return x;
 }
 
+/* Pixel font at a fractional integer scale.  TRACKS uses 3/2 for sound names:
+ * it is deliberately nearest-neighbour, so the 8 px Terminus glyphs stay crisp. */
+static int32_t font_scale(uint32_t v, uint32_t num, uint32_t den)
+{
+    return (int32_t)((v * num + den / 2u) / den);
+}
+static int32_t cv_text_scaled(int32_t x, int32_t y, const felucca_font_t *f, const char *s, uint16_t c,
+                              uint32_t num, uint32_t den)
+{
+    uint16_t ramp[16];
+    uint32_t r = c >> 11, g = (c >> 5) & 63u, b = c & 31u, a;
+    for (a = 0; a < 16u; a++)
+        ramp[a] = (uint16_t)(((r * a / 15u) << 11) | ((g * a / 15u) << 5) | (b * a / 15u));
+    for (; *s; s++) {
+        uint32_t gi = glyph(f, (uint8_t)*s), sx, sy, dx, dy, w = f->bw[gi], dw = (uint32_t)font_scale(w, num, den);
+        const uint8_t *gd = f->data + f->off[gi];
+        uint32_t dh = (uint32_t)font_scale(f->h, num, den), bpr = ((w >> f->sh) + 1u) / 2u;
+        for (dy = 0; dy < dh; dy++) {
+            sy = (dy * den) / num;
+            for (dx = 0; dx < dw; dx++) {
+                uint32_t v;
+                sx = (dx * den) / num;
+                if (f->bits == 1u)
+                    v = (gd[((sy >> f->sh) * (w >> f->sh) + (sx >> f->sh)) >> 3] >>
+                         (7u - (((sy >> f->sh) * (w >> f->sh) + (sx >> f->sh)) & 7u))) & 1u ? 15u : 0u;
+                else {
+                    uint8_t q = gd[(sy >> f->sh) * bpr + (sx >> f->sh) / 2u];
+                    v = ((sx >> f->sh) & 1u) ? (q & 15u) : (q >> 4);
+                }
+                if (v)
+                    cv_pset(x - font_scale(f->pad, num, den) + (int32_t)dx, y + (int32_t)dy, ramp[v]);
+            }
+        }
+        x += font_scale(f->adv[gi], num, den);
+    }
+    return x;
+}
+static int32_t text_w_scaled(const felucca_font_t *f, const char *s, uint32_t num, uint32_t den)
+{
+    int32_t w = 0;
+    for (; *s; s++)
+        w += font_scale(f->adv[glyph(f, (uint8_t)*s)], num, den);
+    return w;
+}
+
 static int32_t text_w(const felucca_font_t *f, const char *s)
 {
     int32_t w = 0;

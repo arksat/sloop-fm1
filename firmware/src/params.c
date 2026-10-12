@@ -438,7 +438,7 @@ static int page_for_drum(const page_t *pg)
     if (pg->scope == SC_STEP)                       /* (2.4) the synth steps' roll: the drums have their grid. Reached */
         return 0;                                   /* by ALGO from a synth track, it drew the drum steps as notes */
     if (pg->scope == SC_GLOBAL)
-        return pg->graph != GR_BROWSE && pg->graph != GR_USER;
+        return pg->graph != GR_USER;                 /* PRESETS browses the drum kits too */
     return pg->scope != SC_ENGINE && (pg->scope != SC_TRACK || pg->fam == FAM_SEQ || pg->graph == GR_SLCR ||
                                       pg->graph == GR_INS);
 }

@@ -1,3 +1,7 @@
 build/
 .DS_Store
 __pycache__/
+.jieli/
+.venv/
+outputs/
+web/sim/*.wasm

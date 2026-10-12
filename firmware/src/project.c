@@ -690,15 +690,18 @@ typedef struct {
 #endif
     uint32_t lights;                               /* SLOOP 2.3: the backlight (panel.c lights_word); appended,
                                                     * so 2.2 still reads its part (st_load cuts at its size) */
+    uint8_t preset_fav[sizeof preset_fav];          /* SAVE > PRESETS: factory and user sound favourites */
 } persist_t;
 #define PERSIST_SIZE_V22 __builtin_offsetof(persist_t, lights)   /* the settings as 2.2 wrote them (no lights) */
-_Static_assert(sizeof(persist_t) == PERSIST_SIZE_V22 + 4u, "lights: the last word, no padding before it");
+#define PERSIST_SIZE_V26 __builtin_offsetof(persist_t, preset_fav)
+_Static_assert(PERSIST_SIZE_V26 == PERSIST_SIZE_V22 + 4u, "lights: no padding before favourites");
 #if FELUCCA_ARRANGER
 _Static_assert(__builtin_offsetof(persist_t, arrangement) == 48u && sizeof(arr_config_t) == 36u,
                "the web editor's Song page edits bytes 48..83 of the settings (web/editor.html ARR)");
 #endif
 #if FELUCCA_ARRANGER
-#define PERSIST_MAGIC 0x50455233u                  /* "PER3": includes the song order */
+#define PERSIST_MAGIC 0x50455234u                  /* "PER4": validates the PRESETS favourites bitmap */
+#define PERSIST_MAGIC_V26 0x50455233u              /* "PER3": settings before the validated favourites */
 #else
 #define PERSIST_MAGIC 0x50455232u
 #endif
@@ -728,9 +731,14 @@ static void persist_boot(void)                    /* before settings_init / pane
     }
     {
         int n = st_load(OBJ_SETTINGS, &p, sizeof p);
-        if (n == (int)PERSIST_SIZE_V22 && p.magic == PERSIST_MAGIC)
+        if (n == (int)PERSIST_SIZE_V22 && (p.magic == PERSIST_MAGIC || p.magic == PERSIST_MAGIC_V26)) {
             p.lights = 0;                          /* from 2.2: backlight off */
-        if (((n == (int)sizeof p || n == (int)PERSIST_SIZE_V22) && p.magic == PERSIST_MAGIC)
+            memset(p.preset_fav, 0, sizeof p.preset_fav);
+        }
+        if (n == (int)PERSIST_SIZE_V26 && (p.magic == PERSIST_MAGIC || p.magic == PERSIST_MAGIC_V26))
+            memset(p.preset_fav, 0, sizeof p.preset_fav); /* before favourites */
+        if (((n == (int)sizeof p || n == (int)PERSIST_SIZE_V26 || n == (int)PERSIST_SIZE_V22) &&
+             (p.magic == PERSIST_MAGIC || p.magic == PERSIST_MAGIC_V26))
 #if FELUCCA_ARRANGER
             || (n == (int)(16u + sizeof(panel_t)) && p.magic == 0x50455232u)
 #endif
@@ -741,12 +749,18 @@ static void persist_boot(void)                    /* before settings_init / pane
             settings.zoom = p.zoom;
             if (p.panel.magic == PANEL_MAGIC)
                 panel = p.panel;
-            if (p.magic == PERSIST_MAGIC)
+            if (p.magic == PERSIST_MAGIC || p.magic == PERSIST_MAGIC_V26)
                 lights_from_word(p.lights);
-            else
+            else {
                 p.lights = 0;
+                memset(p.preset_fav, 0, sizeof p.preset_fav);
+            }
+            if (p.magic == PERSIST_MAGIC)
+                memcpy(preset_fav, p.preset_fav, sizeof preset_fav);
+            else
+                memset(preset_fav, 0, sizeof preset_fav); /* do not interpret an older tail as favourites */
 #if FELUCCA_ARRANGER
-            if (p.magic == PERSIST_MAGIC && arr_valid(&p.arrangement, 15u))
+            if ((p.magic == PERSIST_MAGIC || p.magic == PERSIST_MAGIC_V26) && arr_valid(&p.arrangement, 15u))
                 arrangement = p.arrangement;
             else
                 p.arrangement = arrangement;
@@ -888,6 +902,7 @@ static void persist_fill(persist_t *p)              /* the settings as they are 
     p->zoom = settings.zoom;
     p->panel = panel;
     p->lights = lights_word();
+    memcpy(p->preset_fav, preset_fav, sizeof preset_fav);
 #if FELUCCA_ARRANGER
     p->arrangement = arrangement;
 #endif

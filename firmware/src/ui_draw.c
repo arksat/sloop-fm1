@@ -78,18 +78,13 @@ static void draw_head(void)
         cv_text(x + 12, 1, &FONT_S, "OCT", C_GRAY);
         cv_text(x + 40, 1, &FONT_S, b, C_HI);
     }
-    if (FELUCCA_ICONS) {                              /* the selected track: tape + number */
-        cv_icon(156, 2, ICON_TAPE, C_GRAY);
-        b[0] = (char)('1' + song.sel);
-        b[1] = 0;
-        cv_rect(168, 2, 12, 16, TE_COL[song.sel & 3u]);
-        cv_text(170, 1, &FONT_S, b, C_BLACK);
-    } else {
-        b[0] = 'T';
-        b[1] = (char)('1' + song.sel);
-        b[2] = 0;
-        cv_text(158, 1, &FONT_S, b, C_HI);
-    }
+    /* Selected track: a clear coloured label, with no icon or filled badge. */
+    b[0] = 'T';
+    b[1] = 'R';
+    b[2] = 'K';
+    b[3] = (char)('1' + song.sel);
+    b[4] = 0;
+    cv_text(156, 1, &FONT_S, b, TE_COL[song.sel & 3u]);
     {   /* battery, 3 bars; USB when a host is there */
         int32_t lvl = batt_shown(), k;
         int32_t bx = 236 - 19;                          /* right edge (the CPU figure is in the console) */
@@ -285,7 +280,8 @@ static void graph_roll(const track_t *t, uint16_t c)
         }
         for (j = 0; j < st->n; j++) {
             int32_t y = 80 - (st->note[j] - lo) * 74 / (hi - lo);
-            cv_rect(x + 2, y, 10, 1, (st->flags & SF_ACCENT) ? C_WHITE : c);
+            /* Match the HOME step tiles: a note is a solid, readable 5 px bar. */
+            cv_rect(x + 2, y - 2, 10, 5, (st->flags & SF_ACCENT) ? C_WHITE : c);
             if (j == 0)
                 prev_y = y;
         }
@@ -395,15 +391,39 @@ static uint32_t graph_signature(void)
 /* preset browser: the list by kind (ui.c BANK), the current one in white */
 static void graph_browse(void)
 {
-    uint32_t total, cur = preset_pos(&total), e, k;
+    uint32_t total = preset_view_count(), base, cur, e, k;
     int32_t row;
+    if (is_drum(TSEL)) {                               /* the SAVE browser shows kits when track 4 is selected */
+        total = kit_view_count();
+        if (!total)
+            return;
+        base = (uint32_t)clamp(TDRUM->p[P_E0], 0, DRUM_KITS - 1);
+        cur = kit_view_pos(base);
+        for (row = -2; row <= 3; row++) {
+            int32_t y = 2 + (row + 2) * 20, pos = (int32_t)cur + row;
+            if (pos < 0 || pos >= (int32_t)total)
+                continue;
+            k = kit_view_at((uint32_t)pos);
+            if (!row)
+                cv_rect(4, y + 7, 3, 3, C_WHITE);
+            cv_text(14, y + 2, &FONT_S, "KIT", row ? C_DIM : C_GRAY);
+            cv_text_scaled(64, y, &FONT_S, DRUM_KIT_NAMES[k], kit_is_fav(k) ? TE_COL[3] : row ? C_GRAY : C_WHITE, 6, 5);
+        }
+        return;
+    }
     if (!total)
         return;
-    for (row = -3; row <= 3; row++) {
-        int32_t y = 4 + (row + 3) * 17;
+    base = preset_pos(&k);
+    cur = preset_view_pos(base);
+    for (row = -2; row <= 3; row++) {                 /* 6/5 font: six clear rows in the 124 px graph */
+        int32_t y = 2 + (row + 2) * 20;
         char tag[5], nm[13];
         int sel = row == 0;
-        uint32_t n = (cur + total * 4u + (uint32_t)row) % total;
+        int32_t pos = (int32_t)cur + row;
+        uint32_t n;
+        if (pos < 0 || pos >= (int32_t)total)
+            continue;                                  /* never repeat the one FAV across empty rows */
+        n = preset_view_at((uint32_t)pos);
         e = preset_at(n, &k);
         if (e == NENGINES) {                             /* user preset: "U07" and its name */
             up_slot_label(tag, k);
@@ -413,9 +433,9 @@ static void graph_browse(void)
             str_cpy(nm, ENGINES[e]->presets[k].name, sizeof nm);
         }
         if (sel)
-            cv_rect(4, y + 6, 3, 3, C_WHITE);
-        cv_text(14, y, &FONT_S, tag, sel ? C_GRAY : C_DIM);
-        cv_text(54, y, &FONT_S, nm, sel ? C_WHITE : C_GRAY);
+            cv_rect(4, y + 7, 3, 3, C_WHITE);
+        cv_text(14, y + 2, &FONT_S, tag, sel ? C_GRAY : C_DIM); /* U01/U02 stay crisp beside the larger name */
+        cv_text_scaled(64, y, &FONT_S, nm, preset_is_fav(n) ? TE_COL[3] : sel ? C_WHITE : C_GRAY, 6, 5);
     }
 }
 
@@ -876,15 +896,27 @@ static void draw_columns(void)
         return;
     }
     if (cur_page()->graph == GR_BROWSE) {
-        uint32_t total, cur = preset_pos(&total);
+        uint32_t total = preset_view_count(), base, cur;
         char u[8];
+        if (is_drum(TSEL)) {
+            fmt_int(val, TDRUM->p[P_E0] + 1);
+            str_cpy(u, "/", sizeof u);
+            fmt_int(u + 1, DRUM_KITS);
+            draw_column(0, "No.", val, u, VAL(0u), -1, ICON_NONE);
+            draw_column(1, "KIT", "DRUMS", "", VAL(1u), -1, ICON_AUTO);
+            draw_column(2, "CAT", ui.pcat == PC_FAV ? "FAV" : "ALL", "", VAL(2u), -1, ICON_AUTO);
+            draw_column(3, "FAV", kit_is_fav((uint32_t)TDRUM->p[P_E0]) ? "ON" : "OFF", "", VAL(3u), -1, ICON_AUTO);
+            return;
+        }
+        base = preset_pos(&cur);
+        cur = preset_view_pos(base);
         fmt_int(val, (int32_t)cur + 1);
         str_cpy(u, "/", 8);
         fmt_int(u + 1, (int32_t)total);
         draw_column(0, "No.", val, u, VAL(0u), -1, ICON_NONE);
         draw_column(1, "ENG", ENGINES[TSEL->eng_req]->name, "", VAL(1u), -1, engine_icon(ENGINES[TSEL->eng_req]->name));
-        draw_column(2, "", "", "", C_HI, -1, ICON_AUTO);
-        draw_column(3, "", "", "", C_HI, -1, ICON_AUTO);
+        draw_column(2, "CAT", PRESET_CAT[ui.pcat % PC_COUNT], "", VAL(2u), -1, ICON_AUTO);
+        draw_column(3, "FAV", preset_is_fav(base) ? "ON" : "OFF", "", VAL(3u), -1, ICON_AUTO);
         return;
     }
     if (cur_page()->graph == GR_USER) {                  /* SLOT, then three GO buttons */
