@@ -172,7 +172,7 @@ static int32_t cv_text(int32_t x, int32_t y, const felucca_font_t *f, const char
 }
 
 /* Pixel font at a fractional integer scale.  TRACKS uses 3/2 for sound names:
- * it is deliberately nearest-neighbour, so the 8 px Terminus glyphs stay crisp. */
+ * it is deliberately nearest-neighbour, so the 8 px Spleen glyphs stay crisp. */
 static int32_t font_scale(uint32_t v, uint32_t num, uint32_t den)
 {
     return (int32_t)((v * num + den / 2u) / den);

@@ -637,7 +637,7 @@ The song's settings can only be edited while it is stopped (*STOP FIRST*). An em
 
 The **title line** of every screen also carries short messages: *KEY D*, *ERASED*, *AGAIN: SAVE*, *NEXT: B*, *chain A B B C*, *lock flt 12*…
 
-The lettering (2.6) is Terminus **Bold**, all in **capitals**: thicker strokes, easier to read on the small screen at arm's length; the layout is the same as before (same 8 × 16 cell).
+The lettering is **Spleen** 8 × 16 (2.7; before: Terminus Bold), all in **capitals**: crisp pixels, no anti-aliasing; the layout is the same as before (same 8 × 16 cell).
 
 ---
 

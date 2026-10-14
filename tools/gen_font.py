@@ -4,13 +4,13 @@
 """Render the bitmap fonts to a C header (assets/fonts/):
   S  labels / units / status   Latin-1 32..255 at 1x
   L  large values / titles     32..95 (digits, signs, capitals), the same glyphs at 2x
-Terminus Bold 8x16 (BDF, SIL OFL 1.1). TTF fonts also work through render()
+Spleen 8x16 (BDF, BSD-2-Clause; SLOOP 2.7, after Terminus Bold). TTF fonts also work through render()
 (anti-aliased, tabular figures via the OpenType `tnum` feature).
 
 Glyph format: per glyph an advance width, a bitmap width and an offset; the
 bitmap starts FONT_PAD pixels left of the pen position (room for side
-bearings); rows top to bottom. A font whose pixels are all on or off (the
-Terminus pixel font) is stored at 1 bit a pixel (SLOOP 2.6: 5376 bytes
+bearings); rows top to bottom. A font whose pixels are all on or off (a
+pixel font) is stored at 1 bit a pixel (SLOOP 2.6: 5376 bytes
 instead of 21504), the glyph's rows one after the other, high bit first, each
 glyph from a whole byte, and marked bits = 1; an anti-aliased one (TTF) stays at
 2 pixels per byte (high nibble first), alpha 0..15, bits = 0 (gfx.c cv_text).
@@ -22,11 +22,11 @@ from PIL import Image, ImageDraw, ImageFont
 
 FONTS = Path(__file__).resolve().parents[1] / "assets" / "fonts"
 # (name, file, px, scale, pixel, first, last): pixel fonts are rendered without
-# anti-aliasing at their design size and enlarged by an integer factor
-# SLOOP 2.6: Terminus Bold (the same 8 x 16 cell and advances as the regular one: no layout moves), drawn in
-# capitals only (gfx.c glyph); the regular ter-u16n.bdf stays for the web editor's font (gen_webfont.py)
-SIZES = [("S", "ter-u16b.bdf", 16, 1, True, 32, 255),   # Latin-1 (Hügelton needs the umlaut)
-         ("L", "ter-u16b.bdf", 16, 2, True, 32, 95)]   # values / titles: digits, signs, capitals
+# anti-aliasing at their design size and enlarged by an integer factor.
+# SLOOP 2.7: Spleen 8x16 (the same 8 x 16 cell and advances as Terminus: no layout moves), drawn in capitals
+# only (gfx.c glyph); Terminus (ter-u16n.bdf) stays for the web editor's font (gen_webfont.py)
+SIZES = [("S", "spleen-8x16.bdf", 16, 1, True, 32, 255),
+         ("L", "spleen-8x16.bdf", 16, 2, True, 32, 95)]
 PAD = 2
 
 
@@ -44,7 +44,7 @@ def upscale(px_, w, h, scale):
 
 
 def render_bdf(path, scale, first, last):
-    """BDF bitmap font (Terminus 8x16): exact pixels, cell = the font bounding box."""
+    """BDF bitmap font (Spleen / Terminus 8x16): exact pixels, cell = the font bounding box."""
     lines = path.read_text(errors="replace").splitlines()
     fbb = next(l for l in lines if l.startswith("FONTBOUNDINGBOX")).split()
     cw, ch, fx, fy = int(fbb[1]), int(fbb[2]), int(fbb[3]), int(fbb[4])
@@ -106,8 +106,13 @@ def render(ttf, px, scale, pixel, first, last):
         return render_bdf(FONTS / ttf, scale, first, last)
     font = ImageFont.truetype(str(FONTS / ttf), px)
     feats = None if pixel else ["tnum"]
+    try:
+        bbox = font.getbbox("A8|(", features=feats)
+    except KeyError:                                  # Pillow without libraqm: keep the font's normal figures
+        feats = None
+        bbox = font.getbbox("A8|(")
     asc, desc = font.getmetrics()
-    top = max(0, font.getbbox("A8|(", features=feats)[1] - 1)
+    top = max(0, bbox[1] - 1)
     h = asc + desc - top
     glyphs = []
     for c in range(first, last + 1):
@@ -129,8 +134,7 @@ def main(out):
     for name, ttf, px, scale, pixel, first, last in SIZES:
         h, glyphs = render(ttf, px, scale, pixel, first, last)
         if scale > 1 and pixel and base is not None:
-            # SLOOP 2.4: a pixel font at 2x is the 1x font's own bitmaps, enlarged while drawing (gfx.c
-            # cv_text): no second copy in flash (24 KB). Same glyphs, same pixels: checked here.
+            # A pixel font at 2x is the 1x font's own bitmaps, enlarged while drawing (gfx.c): no second copy.
             bname, bfirst, bh, bglyphs, bone = base
             assert scale == 2 and first == bfirst and h == bh * 2, "L must be S at 2x, same first glyph"
             for (adv, bw, g), (badv, bbw, bg) in zip(glyphs, bglyphs):
