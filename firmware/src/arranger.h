@@ -7,6 +7,7 @@
 #include <stdint.h>
 #define ARR_STEPS 16u
 #define ARR_SCENES 4u
+#define SONG_COUNT 3u
 #define ARR_NONE (-1)
 #define ARR_DONE (-2)
 #define ARR_INVALID (-3)

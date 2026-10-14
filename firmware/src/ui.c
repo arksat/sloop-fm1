@@ -12,6 +12,13 @@ static void panel_setup(void);
 static void project_load(uint32_t slot);
 static void project_erase(uint32_t slot);        /* SAVE > PROJECT > ERASE (2.6) */
 static int project_used(uint32_t slot);
+#if FELUCCA_ARRANGER
+static int song_load(uint32_t bank);
+static int song_save_as(uint32_t bank);
+static int song_clear(uint32_t bank);
+static uint32_t song_number(void);
+static int song_saved(uint32_t bank);
+#endif
 static int up_used(uint32_t k);              /* user presets: upreset.c */
 static int up_load(uint32_t k);
 static int up_load_to(track_t *t, uint32_t k);
@@ -32,7 +39,7 @@ static uint8_t sync_reload;                  /* engine / preset / project / user
 #define VAL(c) ((c) == ui.hot_col && ui.hot_t ? C_WHITE : TE_COL[(c) & 3u])   /* LIVE: one colour per knob */
 #define RATIO(d, v) ((d)->max > (d)->min ? ((int32_t)(v) - (d)->min) * 1000 / ((d)->max - (d)->min) : -1)
 /* layout: four 60 px columns, 4 px inset */
-/* Terminus 8x16 (S) and 16x32 (L) */
+/* Spleen 8x16 (S) and 16x32 (L) */
 #define Y_HEAD 0
 #define H_HEAD 20
 #define Y_LABEL 26
@@ -55,7 +62,8 @@ static struct {
     uint8_t hot_col, hot_t;      /* column whose knob was just turned (drawn white) */
     uint8_t menu;                /* 0 off, 1 list, 2 about (HOME held) */
     uint8_t menu_sel;
-    uint32_t menu_sig, home_t0;  /* HOME press time (btn_hold) */
+    uint32_t menu_sig, home_t0, settings_t0;  /* HOME / HOME-screen OCT- press time (btn_hold) */
+    int8_t settings_octave;                   /* octave before an OCT- hold became SETTINGS */
     uint8_t force;               /* full redraw pending */
     uint8_t msg_t;               /* transient message frames */
     uint8_t bpm_t;               /* frames the BPM stays highlighted after a SELECT turn */

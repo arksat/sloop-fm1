@@ -380,7 +380,7 @@ static void layer_key(uint32_t layer, uint32_t k, uint32_t down)
                     chain_tap[chain_taps++] = (uint8_t)w;   /* (SAVE held: more taps make a chain) */
             } else {
                 section_load((uint32_t)w);
-                ui_say("LOADED ", b);
+                ui_say("LOADED SCENE ", b);
             }
         } else if (w < 8) {
             uint32_t s = (uint32_t)w - 4u;
@@ -391,7 +391,7 @@ static void layer_key(uint32_t layer, uint32_t k, uint32_t down)
             } else {
                 sec_armed = 0;
                 section_store(s);
-                ui_say("SAVED ", b);
+                ui_say("SAVED SCENE ", b);
             }
         } else if (w == 12) {
             if (srec) {
@@ -413,7 +413,8 @@ static void layer_key(uint32_t layer, uint32_t k, uint32_t down)
                 ui_message(live_sec < 0 ? "PICK A PART" : "REC: NEXT BAR");
             }
         } else if (w == 15) {
-            studio_open(SC_SONG);
+            studio_open(SC_SONGMGR);
+            song_manager_page = 1;                       /* SONG key: arrangement editor */
         }
         return;
     }
@@ -453,6 +454,7 @@ static void chain_release(void)
         fm1_irq_on();
     }
     chain_taps = 0;
+    sec_armed = 0;                                     /* letting SAVE go cancels an overwrite confirmation */
 }
 /* "chain A B B C": the chain being built (SAVE held) or playing */
 static void chain_sub(char *sub, uint32_t n)
@@ -570,13 +572,14 @@ typedef struct {
     uint8_t marks;               /* small marks under the label (a ratchet), 0 = none */
     uint8_t tag;                 /* a dot in the top right corner (a nudge or a lock on the step), 0 = none */
     uint8_t cond;                /* top left: the step's fill condition (FC_FILL an "F", FC_NOFILL an "x"), 0 = none */
+    uint8_t warn;                /* replacement confirmation: use OK? instead of the upper label */
 } tile_t;
 
 static void tiles_draw(const tile_t *tl, uint32_t *cache)
 {
     uint32_t r, c, sig = 7u;
     for (r = 0; r < 16u; r++)
-        sig = studio_hash(sig * 31u + tl[r].bg * 3u + tl[r].fg * 5u + tl[r].top * 7u + tl[r].marks + tl[r].tag * 11u + tl[r].cond * 13u,
+        sig = studio_hash(sig * 31u + tl[r].bg * 3u + tl[r].fg * 5u + tl[r].top * 7u + tl[r].marks + tl[r].tag * 11u + tl[r].cond * 13u + tl[r].warn * 17u,
                           tl[r].lab);
     if (!ui.force && sig == *cache)
         return;
@@ -598,7 +601,7 @@ static void tiles_draw(const tile_t *tl, uint32_t *cache)
                 memcpy(upper, t->lab, n);
                 upper[n] = 0;
                 str_cpy(lower, br + 1, sizeof lower);
-                te_text_c(x + 28, 3, upper, t->fg);
+                te_text_c(x + 28, 3, t->warn ? "OK?" : upper, t->fg);
                 te_text_c(x + 28, 19, lower, t->fg);
             } else {
                 te_text_c(x + 28, 9, t->lab, t->fg);
@@ -662,14 +665,16 @@ static void punch_tiles_draw(const tile_t *tl, uint32_t *cache)
 
 static void layer_title(const char *name, const char *sub, uint16_t col, uint32_t *cache)
 {
+    const felucca_font_t *name_font = text_w(&FONT_L, name) <= 120 ? &FONT_L : &FONT_S;
+    int32_t name_x;
     uint32_t locked = ly_lock != LY_PLAY;
     uint32_t sig = studio_hash(studio_hash(col, name), sub) + (ui.msg_t ? studio_hash(3u, ui.msg) : 0u) + locked * 7919u;
     if (!ui.force && sig == *cache)
         return;
     *cache = sig;
     cv_begin(240, 40, C_BLACK);
-    cv_text(4, 2, &FONT_L, name, col);
-    cv_text(4 + text_w(&FONT_L, name) + 10, 18, &FONT_S, ui.msg_t ? ui.msg : sub, ui.msg_t ? C_WHITE : TE_G3);
+    name_x = cv_text(4, name_font == &FONT_L ? 2 : 10, name_font, name, col);
+    cv_text(name_x + 10, 18, &FONT_S, ui.msg_t ? ui.msg : sub, ui.msg_t ? C_WHITE : TE_G3);
     if (locked) {                                         /* locked open (HOME): any button lets it go */
         int32_t w = (int32_t)text_w(&FONT_S, "LOCK") + 8;
         cv_rect(236 - w, 4, w, 15, C_WHITE);
@@ -992,23 +997,28 @@ static void layer_screen_draw(void)
         } else if (chain_taps >= 2u || chain_n) {
             chain_sub(sub, sizeof sub);                 /* "chain A B B C" */
         } else {
-            str_cpy(sub, arrangement_enabled ? "song mode" : srec ? "rec armed" : "play  store", sizeof sub);
+            str_cpy(sub, arrangement_enabled ? "song mode" : srec ? "rec armed" : "", sizeof sub);
         }
         for (i = 0; i < 4u; i++) {                      /* (the chain's next entry framed as the one asked for) */
-            int used = (ready >> i) & 1u, playing = live_sec == (int8_t)i && !arrangement_clock.running;
+            int used = (ready >> i) & 1u;
             int next = live_req == (int8_t)i ||
                        (chain_n && live_req < 0 && (chain_sec[((chain_i + 1u) % chain_n) % CHAIN_MAX] & 3u) == i);
             str_cpy(tl[i].lab, "load\nA", 8);
             tl[i].lab[5] = (char)('A' + i);
-            tl[i].bg = used ? (playing ? TE_COL[i] : TE_DIM[i]) : TE_G1;
-            tl[i].fg = used ? C_BLACK : TE_G3;
+            tl[i].bg = used ? TE_DIM[i] : TE_G2;
+            tl[i].fg = used ? C_WHITE : TE_G3;
             tl[i].top = next ? C_WHITE : 0;
-            str_cpy(tl[4 + i].lab, "save A", 8);
+            str_cpy(tl[4 + i].lab, "save\nA", 8);
             tl[4 + i].lab[5] = (char)('A' + i);
-            tl[4 + i].bg = sec_armed == i + 1u ? TE_RED : TE_G1;
-            tl[4 + i].fg = sec_armed == i + 1u ? C_BLACK : TE_G4;
-            tl[4 + i].top = TE_DIM[i];
+            tl[4 + i].warn = sec_armed == i + 1u;
+            tl[4 + i].bg = tl[4 + i].warn ? TE_RED : used ? TE_DIM[i] : TE_G2;
+            tl[4 + i].fg = tl[4 + i].warn || used ? C_WHITE : TE_G3;
+            tl[4 + i].top = 0;
         }
+        for (i = 8u; i < 12u; i++)                    /* reserved row: intentionally inactive */
+            tl[i].bg = RGB(18, 18, 22);
+        for (i = 0; i < 16u; i++)
+            tl[i].top = 0;                             /* SONG layer: no tile colour bars, including empty slots */
         str_cpy(tl[12].lab, arrangement_enabled ? "song" : "loop", 8);
         tl[12].bg = arrangement_enabled ? C_WHITE : TE_G2;
         tl[12].fg = arrangement_enabled ? C_BLACK : C_WHITE;
@@ -1016,7 +1026,7 @@ static void layer_screen_draw(void)
         tl[13].bg = srec == 2u ? TE_RED : TE_G1;
         tl[13].fg = srec == 2u ? C_BLACK : TE_RED;
         tl[13].top = srec == 1u ? TE_RED : 0;
-        str_cpy(tl[15].lab, "chain", 8);
+        str_cpy(tl[15].lab, "song", 8);
         tl[15].bg = TE_G1;
         tl[15].fg = TE_G4;
         break;
@@ -1025,7 +1035,7 @@ static void layer_screen_draw(void)
         break;
     }
     layer_sub_shown = sub;
-    layer_title(LAYER_NAME[layer % LY_COUNT], sub, col, &head);
+    layer_title(layer == LY_SONG ? "load/save scene" : LAYER_NAME[layer % LY_COUNT], sub, col, &head);
     if (layer == LY_FX)
         punch_tiles_draw(tl, &tiles);
     else
@@ -1035,6 +1045,12 @@ static void layer_screen_draw(void)
         ui.msg_t = 0;
         te_dials(184, lab, val, ratio, layer * 7919u, &foot);
         ui.msg_t = m;
+    }
+    if (layer == LY_SONG && !ui.msg_t) {               /* the otherwise empty footer is the quick-chain reminder */
+        static const char hint[] = "Q.CHAIN: PLAY AND SELECT";
+        cv_begin(240, 16, C_BLACK);
+        cv_text((240 - text_w(&FONT_S, hint)) / 2, 0, &FONT_S, hint, TE_G3);
+        cv_blit(0, 224);
     }
 }
 

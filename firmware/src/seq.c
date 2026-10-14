@@ -1665,7 +1665,7 @@ static void audition_block(void)
 
 static void keyboard_block(void)
 {
-    uint32_t cur = fm1_in.notes, ch = cur ^ kb_prev, k, r;
+    uint32_t cur = fm1_in.notes & ~(1u << 25), ch = cur ^ kb_prev, k, r; /* F#5 is PLAY/STOP, not a note */
     audition_block();
     if (er_mute && layer_now() != LY_ERASE)
         er_mute = 0;                                  /* EDIT let go: its keys erase again (2.6) */

@@ -53,10 +53,10 @@
 #include "seq.c"
 #include "audio.c"
 #include "panel.c"
+#include "icons.c"           /* parameter icons, including SONG's LOAD / SAVE controls */
 #include "ui.c"
 #include "ui_song.c"
 #include "ui_studio.c"
-#include "icons.c"           /* parameter icons (FELUCCA_ICONS), used by ui_draw.c */
 #include "ui_draw.c"
 #include "ui_vis.c"           /* the full-screen visualiser (HOME on HOME, 2.4) */
 #include "ui_layers.c"       /* hold a function button: what the keys and knobs do (TE style) */

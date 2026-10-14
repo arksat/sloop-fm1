@@ -111,7 +111,11 @@ static void draw_frame(void)
     for (i = 0; i < 4u; i++)                            /* left inset of each column */
         lcd_fill(i * 60u, Y_LABEL, 4, Y_SEP_END - Y_LABEL, C_BLACK);
     lcd_fill(0, H_HEAD, 240, 1, C_LINE);
-    lcd_fill(0, Y_FOOT - 2, 240, 1, C_LINE);
+    /* PRESETS extends its list into the former footer.  Its seventh row crosses
+     * this old transport divider, so do not redraw a line through the glyphs
+     * every time the selected preset changes. */
+    if (ui.home || cur_page()->graph != GR_BROWSE)
+        lcd_fill(0, Y_FOOT - 2, 240, 1, C_LINE);
     for (i = 1; i < 4u; i++)
         lcd_fill(i * 60u - 1u, H_HEAD + 4, 1, Y_SEP_END - H_HEAD - 4, C_LINE);
 }
@@ -388,47 +392,42 @@ static uint32_t graph_signature(void)
     }
     return h;
 }
-/* preset browser: the list by kind (ui.c BANK), the current one in white */
-static void graph_browse(void)
+/* One 20 px row of the preset browser.  6/5 keeps the pixel font crisp at 120%. */
+static void browse_row(int32_t row, int32_t y)
 {
     uint32_t total = preset_view_count(), base, cur, e, k;
-    int32_t row;
     if (is_drum(TSEL)) {                               /* the SAVE browser shows kits when track 4 is selected */
         total = kit_view_count();
         if (!total)
             return;
         base = (uint32_t)clamp(TDRUM->p[P_E0], 0, DRUM_KITS - 1);
         cur = kit_view_pos(base);
-        for (row = -2; row <= 3; row++) {
-            int32_t y = 2 + (row + 2) * 20, pos = (int32_t)cur + row;
-            if (pos < 0 || pos >= (int32_t)total)
-                continue;
-            k = kit_view_at((uint32_t)pos);
-            if (!row)
-                cv_rect(4, y + 7, 3, 3, C_WHITE);
-            cv_text(14, y + 2, &FONT_S, "KIT", row ? C_DIM : C_GRAY);
-            cv_text_scaled(64, y, &FONT_S, DRUM_KIT_NAMES[k], kit_is_fav(k) ? TE_COL[3] : row ? C_GRAY : C_WHITE, 6, 5);
-        }
+        if ((int32_t)cur + row < 0 || (int32_t)cur + row >= (int32_t)total)
+            return;
+        k = kit_view_at((uint32_t)((int32_t)cur + row));
+        if (!row)
+            cv_rect(4, y + 7, 3, 3, C_WHITE);
+        cv_text(14, y + 2, &FONT_S, "KIT", row ? C_DIM : C_GRAY);
+        cv_text_scaled(64, y, &FONT_S, DRUM_KIT_NAMES[k], kit_is_fav(k) ? TE_COL[3] : row ? C_GRAY : C_WHITE, 6, 5);
         return;
     }
     if (!total)
         return;
     base = preset_pos(&k);
     cur = preset_view_pos(base);
-    for (row = -2; row <= 3; row++) {                 /* 6/5 font: six clear rows in the 124 px graph */
-        int32_t y = 2 + (row + 2) * 20;
+    {
         char tag[5], nm[13];
         int sel = row == 0;
         int32_t pos = (int32_t)cur + row;
         uint32_t n;
         if (pos < 0 || pos >= (int32_t)total)
-            continue;                                  /* never repeat the one FAV across empty rows */
+            return;                                    /* never repeat the one FAV across empty rows */
         n = preset_view_at((uint32_t)pos);
         e = preset_at(n, &k);
-        if (e == NENGINES) {                             /* user preset: "U07" and its name */
+        if (e == NENGINES) {                           /* user preset: "U07" and its name */
             up_slot_label(tag, k);
             up_name(k, nm);
-        } else {                                         /* its kind: BASS, KEYS, PAD... */
+        } else {                                       /* its kind: BASS, KEYS, PAD... */
             str_cpy(tag, preset_kind(n), sizeof tag);
             str_cpy(nm, ENGINES[e]->presets[k].name, sizeof nm);
         }
@@ -437,6 +436,14 @@ static void graph_browse(void)
         cv_text(14, y + 2, &FONT_S, tag, sel ? C_GRAY : C_DIM); /* U01/U02 stay crisp beside the larger name */
         cv_text_scaled(64, y, &FONT_S, nm, preset_is_fav(n) ? TE_COL[3] : sel ? C_WHITE : C_GRAY, 6, 5);
     }
+}
+
+/* preset browser: eight rows around the current sound, continuing through the former footer */
+static void graph_browse(void)
+{
+    int32_t row;
+    for (row = -3; row <= 2; row++)
+        browse_row(row, 2 + (row + 3) * 20);
 }
 
 /* user preset slots around the selected one: "U07  NAME" / EMPTY, the selected one in white */
@@ -460,7 +467,7 @@ static void graph_user(void)
     }
 }
 
-/* project slots: used / empty, the selected one in white */
+/* scene slots: used / empty, the selected one in white */
 static void graph_slots(void)
 {
     uint32_t i;
@@ -468,7 +475,7 @@ static void graph_slots(void)
         int32_t y = 8 + (int32_t)i * 26;
         char b[4];
         int sel = (int32_t)i + 1 == song.g[G_SLOT];
-        b[0] = (char)('1' + i);
+        b[0] = (char)('A' + i);
         b[1] = 0;
         if (sel)
             cv_rect(4, y + 6, 3, 3, C_WHITE);
@@ -710,9 +717,12 @@ static void draw_graph(void)
     if (ui.home) {
         graph_scope(c);
     } else if (drum_note) {                          /* a page the drum track has no use for */
-        static const char *const L[2] = {"DRUM TRACK", "SEQ  TRACKS  GLO DRUMS"};
-        cv_text((240 - text_w(&FONT_S, L[0])) / 2, 26, &FONT_S, L[0], C_HI);
-        cv_text((240 - text_w(&FONT_S, L[1])) / 2, 52, &FONT_S, L[1], C_DIM);
+        const char *what = pg->fam == FAM_SCL ? "SEL" : pg->fam == FAM_ENV ? "ENV" :
+                           pg->fam == FAM_LFO ? "LFO" : pg->fam == FAM_EDIT ? "EDIT" : "CONTROL";
+        char msg[20] = "HAS NO ";
+        str_cpy(msg + str_len(msg), what, sizeof msg - str_len(msg));
+        cv_text_scaled((240 - 2 * text_w(&FONT_S, "DRUM TRACK")) / 2, 20, &FONT_S, "DRUM TRACK", C_HI, 2, 1);
+        cv_text_scaled((240 - 2 * text_w(&FONT_S, msg)) / 2, 60, &FONT_S, msg, C_DIM, 2, 1);
     } else {
         switch (pg->graph) {
         case GR_ADSR:
@@ -781,6 +791,19 @@ static void draw_foot(void)
     const engine_t *e = ENGINES[TSEL->eng_req % NENGINES];
     const char *ename = is_drum(t) ? "DRUM" : e->name;
     int32_t x;
+    if (!ui.home && cur_page()->graph == GR_BROWSE) {  /* PRESETS needs the whole lower area for its list, not transport/status */
+        sig = ui.graph_sig ^ 0xB70F0000u;
+        if (!ui.force && sig == ui.foot_sig)
+            return;                                    /* avoid erasing/repainting the lower rows every frame */
+        ui.foot_sig = sig;
+        /* Start seven pixels above the old divider: this continues the 20 px list rhythm. */
+        lcd_fill(0, Y_FOOT - 7, 240, H_FOOT + 7, C_BLACK);
+        cv_begin(240, H_FOOT, C_BLACK);
+        browse_row(3, 0);
+        browse_row(4, 19);                             /* 120% glyphs are 19 px tall: contiguous rows */
+        cv_blit(0, Y_FOOT - 7);
+        return;
+    }
     pn[0] = 0;
     if (is_drum(t))
         str_cpy(pn, DRUM_KIT_NAMES[drum_kit()], sizeof pn);
@@ -789,7 +812,11 @@ static void draw_foot(void)
     else if (e->npresets)
         str_cpy(pn, e->presets[TSEL->preset % e->npresets].name, sizeof pn);
     if (ui.home) {
-        str_cpy(ti, "HOME", sizeof ti);
+        /* The HOME footer identifies the loaded live section, not the screen itself. */
+        uint32_t sec = live_sec >= 0 && live_sec < 4 ? (uint32_t)live_sec :
+                       (uint32_t)clamp(song.g[G_SLOT], 1, 4) - 1u;
+        ti[0] = (char)('A' + sec);
+        ti[1] = 0;
     } else {                                           /* page title + number in its family: "ENV DEST 2/2" */
         uint32_t i, n = 0, k = 0;
         const char *pt = pg->scope == SC_ENGINE ? e->page_title[pg->id[0] != P_E0] : 0;   /* EDIT: the engine's */
@@ -902,10 +929,10 @@ static void draw_columns(void)
             fmt_int(val, TDRUM->p[P_E0] + 1);
             str_cpy(u, "/", sizeof u);
             fmt_int(u + 1, DRUM_KITS);
-            draw_column(0, "No.", val, u, VAL(0u), -1, ICON_NONE);
-            draw_column(1, "KIT", "DRUMS", "", VAL(1u), -1, ICON_AUTO);
+            draw_column(0, "KIT", "DRUMS", "", VAL(0u), -1, ICON_AUTO);
+            draw_column(1, "FAV", kit_is_fav((uint32_t)TDRUM->p[P_E0]) ? "ON" : "OFF", "", VAL(1u), -1, ICON_AUTO);
             draw_column(2, "CAT", ui.pcat == PC_FAV ? "FAV" : "ALL", "", VAL(2u), -1, ICON_AUTO);
-            draw_column(3, "FAV", kit_is_fav((uint32_t)TDRUM->p[P_E0]) ? "ON" : "OFF", "", VAL(3u), -1, ICON_AUTO);
+            draw_column(3, "No.", val, u, VAL(3u), -1, ICON_NONE);
             return;
         }
         base = preset_pos(&cur);
@@ -913,10 +940,10 @@ static void draw_columns(void)
         fmt_int(val, (int32_t)cur + 1);
         str_cpy(u, "/", 8);
         fmt_int(u + 1, (int32_t)total);
-        draw_column(0, "No.", val, u, VAL(0u), -1, ICON_NONE);
-        draw_column(1, "ENG", ENGINES[TSEL->eng_req]->name, "", VAL(1u), -1, engine_icon(ENGINES[TSEL->eng_req]->name));
+        draw_column(0, "ENG", ENGINES[TSEL->eng_req]->name, "", VAL(0u), -1, engine_icon(ENGINES[TSEL->eng_req]->name));
+        draw_column(1, "FAV", preset_is_fav(base) ? "ON" : "OFF", "", VAL(1u), -1, ICON_AUTO);
         draw_column(2, "CAT", PRESET_CAT[ui.pcat % PC_COUNT], "", VAL(2u), -1, ICON_AUTO);
-        draw_column(3, "FAV", preset_is_fav(base) ? "ON" : "OFF", "", VAL(3u), -1, ICON_AUTO);
+        draw_column(3, "No.", val, u, VAL(3u), -1, ICON_NONE);
         return;
     }
     if (cur_page()->graph == GR_USER) {                  /* SLOT, then three GO buttons */
@@ -966,6 +993,14 @@ static void draw_columns(void)
     for (c = 0; c < 4u; c++) {
         int16_t *vp;
         const param_desc_t *d = page_desc(cur_page(), c, &vp);
+        if (cur_page()->graph == GR_SLOTS && c == 0u) {   /* compact column label, descriptive focus popup */
+            val[0] = (char)('A' + clamp(song.g[G_SLOT], 1, 4) - 1);
+            val[1] = 0;
+            draw_column(0, "SCENE", val, "", VAL(0u), RATIO(d, *vp), param_icon(d, *vp));
+            if (ui.hot_col == 0u)
+                str_cpy(ui.focus_l, "SCENE", sizeof ui.focus_l);
+            continue;
+        }
         if (cur_page()->graph == GR_SLOTS && c == 1u) {   /* 2.6: ERASE, lit while the slot holds a project */
             draw_column(1, "ERASE", "--", "", project_used((uint32_t)song.g[G_SLOT] - 1u) ? C_HI : C_DIM, -1, ICON_AUTO);
             continue;
@@ -1062,6 +1097,12 @@ static void ui_draw(void)
         ui.force = 1;
     }
 #if FELUCCA_ARRANGER
+    if (!ui.menu && on_song_manager()) {
+        song_manager_draw();
+        ui_timers();
+        ui.force = 0;
+        return;
+    }
     if (!ui.menu && on_song_page()) {
         song_screen_draw();
         ui_timers();

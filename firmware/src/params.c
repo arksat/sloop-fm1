@@ -166,7 +166,7 @@ static const param_desc_t GP[G_COUNT] = {
     [G_SYNC] = PE("SYNC", N_SYNC, 0),           /* a setting of the FM-1, not of a project (panel.c lights_sync) */
     [G_ROUTE] = PE("IN", N_MIN, 0),             /* MIDI IN: NOTES (and the clock), CLOCK only, or CH n: that channel only (a setting of the FM-1) */
     [G_INFO] = PD("CPU", F_INT, 0, 0, 0),
-    [G_SLOT] = PD("SLOT", F_INT, 1, 4, 1),
+    [G_SLOT] = PD("SCENE", F_INT, 1, 4, 1),
     [G_NAME] = PE("NAME", N_DASH, 0),
     [G_LOAD] = PE("LOAD", N_GO, 0),
     [G_SAVE] = PE("SAVE", N_GO, 0),
@@ -374,7 +374,7 @@ static void param_format(const param_desc_t *d, int32_t v, char *val, const char
 /* ------------------------------------------------------------ pages --- */
 enum { FAM_HOME, FAM_ENV, FAM_LFO, FAM_FX, FAM_SCL, FAM_EDIT, FAM_GLO, FAM_SAVE, FAM_ARP, FAM_SEQ, FAM_TRK,
        FAM_COUNT };
-enum { SC_TRACK, SC_GLOBAL, SC_ENGINE, SC_STEP, SC_TRK, SC_SONG, SC_DRUM };
+enum { SC_TRACK, SC_GLOBAL, SC_ENGINE, SC_STEP, SC_TRK, SC_SONG, SC_SONGMGR, SC_DRUM };
 enum { GR_NONE, GR_ADSR, GR_LFO, GR_STEPS, GR_ARP, GR_SCALE, GR_FX, GR_ROLL, GR_BROWSE, GR_SLOTS, GR_USER, GR_TRK,
        GR_SLCR, GR_INS };
 
@@ -418,13 +418,13 @@ static const page_t PAGES[] = {
     {"TEXTURE 2", FAM_GLO, SC_GLOBAL, GR_NONE, {G_TXRATE, G_TXWHEN, G_TXDUCK, 0xFF}},
     {"PRESETS", FAM_SAVE, SC_GLOBAL, GR_BROWSE, {0xFF, 0xFF, 0xFF, 0xFF}},   /* browser: PRESETS knob / KNOB 1 */
     {"USER", FAM_SAVE, SC_GLOBAL, GR_USER, {0xFF, 0xFF, 0xFF, 0xFF}},       /* user presets: SLOT LOAD ERASE SAVE */
-    {"PROJECT", FAM_SAVE, SC_GLOBAL, GR_SLOTS, {G_SLOT, 0xFF, G_LOAD, G_SAVE}},   /* (KNOB 2: ERASE, 2.6: ui_input.c) */
+    {"SCENES", FAM_SAVE, SC_GLOBAL, GR_SLOTS, {G_SLOT, 0xFF, G_LOAD, G_SAVE}},   /* (KNOB 2: ERASE, 2.6: ui_input.c) */
     {"TOOLS", FAM_SAVE, SC_GLOBAL, GR_NONE, {G_CLRSEQ, G_INITSND, 0xFF, G_NEWPRJ}},
     {"ARP", FAM_ARP, SC_TRACK, GR_ARP, {P_AMODE, P_ARATE, P_AOCT, P_AGATE}},
     {"ARP 2", FAM_ARP, SC_TRACK, GR_NONE, {P_ASWING, P_APROB, P_AHOLD, P_AORDER}},
     {"STEP", FAM_SEQ, SC_STEP, GR_ROLL, {0, 1, 2, 3}},
     {"PATTERN", FAM_SEQ, SC_TRACK, GR_STEPS, {P_SLEN, P_SDIV, P_SSWING, P_SGATE}},
-    {"SONG", FAM_SEQ, SC_SONG, GR_NONE, {0xFF, 0xFF, 0xFF, 0xFF}},
+    {"SONGS", FAM_HOME, SC_SONGMGR, GR_NONE, {0xFF, 0xFF, 0xFF, 0xFF}}, /* HOME hold: SONG load/save */
     {"TRACKS", FAM_TRK, SC_TRK, GR_TRK, {0, 1, 2, 3}},   /* REC button; TRACK LEVEL LEN PAN */
     {"DRUMS", FAM_TRK, SC_DRUM, GR_NONE, {0xFF,0xFF,0xFF,0xFF}},
 };
@@ -439,8 +439,8 @@ static int page_for_drum(const page_t *pg)
         return 0;                                   /* by ALGO from a synth track, it drew the drum steps as notes */
     if (pg->scope == SC_GLOBAL)
         return pg->graph != GR_USER;                 /* PRESETS browses the drum kits too */
-    return pg->scope != SC_ENGINE && (pg->scope != SC_TRACK || pg->fam == FAM_SEQ || pg->graph == GR_SLCR ||
-                                      pg->graph == GR_INS);
+    return pg->scope != SC_ENGINE && (pg->scope != SC_TRACK || pg->fam == FAM_SEQ || pg->graph == GR_FX ||
+                                      pg->graph == GR_SLCR || pg->graph == GR_INS);
 }
 /* a page the buttons and SELECT reach on the selected track: EDIT > FILTER (TYPE) on ANALOG only */
 static int page_shown(const page_t *pg)

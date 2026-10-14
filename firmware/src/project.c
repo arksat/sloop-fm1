@@ -506,6 +506,62 @@ static void proj_apply(const project_t *p, int all)
 #ifndef PROJ_HOST
 #if FELUCCA_ARRANGER
 #include "arranger_scene.c"
+
+/* The active SONG is the only one whose four SCENEs live in RAM.  The other
+ * two stay as A/B-protected objects in the spare flash area; changing SONG is
+ * therefore a stopped-transport operation, not a RAM-expensive copy. */
+#define SONG_BOOK_MAGIC 0x534E4731u              /* "SNG1" */
+typedef struct {
+    uint32_t magic;
+    uint8_t active, saved, reserved[2];          /* bit per SONG: explicitly saved through the SONG page */
+    arr_config_t arrangement[SONG_COUNT];
+    uint32_t sum;
+} song_book_t;
+static song_book_t song_book;
+static uint8_t song_bank;
+static uint32_t song_book_sum(const song_book_t *b) { return proj_hash(b, sizeof *b - 4u); }
+static int song_book_ok(const song_book_t *b)
+{
+    uint32_t i;
+    if (b->magic != SONG_BOOK_MAGIC || b->active >= SONG_COUNT || b->sum != song_book_sum(b)) return 0;
+    for (i = 0; i < SONG_COUNT; i++)
+        if (b->arrangement[i].count < 1u || b->arrangement[i].count > ARR_STEPS) return 0;
+    return 1;
+}
+static void song_book_defaults(song_book_t *b)
+{
+    uint32_t i;
+    memset(b, 0, sizeof *b);
+    b->magic = SONG_BOOK_MAGIC;
+    for (i = 0; i < SONG_COUNT; i++) arr_defaults(&b->arrangement[i]);
+    b->sum = song_book_sum(b);
+}
+static uint32_t song_scene_obj(uint32_t bank, uint32_t scene)
+{
+    scene &= 3u;
+    if (bank == 0u) return OBJ_PROJECT0 + scene;     /* SLOOP's original four scenes */
+    return (bank == 1u ? OBJ_SONG1_SCENE0 : OBJ_SONG2_SCENE0) + scene;
+}
+static void song_book_sync(void)
+{
+    song_book.arrangement[song_bank] = arrangement;
+    song_book.active = song_bank;
+    song_book.sum = song_book_sum(&song_book);
+}
+static uint32_t song_number(void) { return (uint32_t)song_bank + 1u; }
+static int song_saved(uint32_t bank) { return (song_book.saved & (1u << (bank & 3u))) != 0u; }
+static void song_status(uint32_t bank, const char *verb)
+{
+    char b[16];
+    fmt_int(b, (int32_t)bank + 1);
+    str_cpy(b + str_len(b), " ", sizeof b - str_len(b));
+    str_cpy(b + str_len(b), verb, sizeof b - str_len(b));
+    ui_say("SONG ", b);
+}
+static void song_book_boot(void);
+static int song_load(uint32_t bank);
+static int song_save_as(uint32_t bank);
+static int song_clear(uint32_t bank);
 #endif
 static uint8_t sec_dirty, song_dirty;           /* live sections / the song: in RAM, not yet in flash */
 #if FELUCCA_FLASH
@@ -521,10 +577,37 @@ static union {
 static void proj_fetch(uint32_t slot)
 {
     project_t *q = &proj_slot[slot & 3u];
-    int n = st_load(OBJ_PROJECT0 + (slot & 3u), &proj_tmp, sizeof proj_tmp);
+    int n = st_load(song_scene_obj(song_bank, slot), &proj_tmp, sizeof proj_tmp);
     if (!proj_import(q, &proj_tmp, n))
         q->magic = 0;
 }
+#if FELUCCA_ARRANGER
+static int song_book_write(void)
+{
+    song_book_sync();
+    return !flash_ok || st_save(OBJ_SONGBOOK, &song_book, sizeof song_book) == 0;
+}
+/* A missing book is an upgrade from the one-SONG layout: its existing order
+ * remains SONG 1, and SONG 2/3 start with the normal blank arrangement. */
+static void song_book_boot(void)
+{
+    int n = st_load(OBJ_SONGBOOK, &proj_tmp, sizeof proj_tmp);
+    if (n == (int)sizeof song_book && song_book_ok((const song_book_t *)&proj_tmp)) {
+        memcpy(&song_book, &proj_tmp, sizeof song_book);
+    } else {
+        song_book_defaults(&song_book);
+        song_book.arrangement[0] = arrangement;
+        song_book.saved = 1u;                    /* the original SLOOP SONG is already stored in flash */
+        song_book.sum = song_book_sum(&song_book);
+    }
+    if (!song_book.saved && song_book.active == 0u) { /* book written before the saved marker existed */
+        song_book.saved = 1u;
+        song_book.sum = song_book_sum(&song_book);
+    }
+    song_bank = song_book.active;
+    arrangement = song_book.arrangement[song_bank];
+}
+#endif
 #include "fm6_bank.c"                           /* the FM6 patch bank (eng_fm6.c PTCH B1..B27): staged in proj_tmp */
 #endif
 
@@ -537,7 +620,7 @@ static void project_save(uint32_t slot)
     proj_capture(p);
 #if FELUCCA_FLASH
     if (flash_ok) {
-        ui_message(st_save(OBJ_PROJECT0 + (slot & 3u), p, sizeof *p) ? "SAVE ERROR" : "SAVED");
+        ui_message(st_save(song_scene_obj(song_bank, slot), p, sizeof *p) ? "SAVE ERROR" : "SAVED");
         return;
     }
 #endif
@@ -555,11 +638,11 @@ static void project_erase(uint32_t slot)
     if (song.playing || transport_req) { ui_message("STOP BEFORE ERASE"); return; }
 #endif
     if (!proj_ok(&proj_slot[slot])) {
-        ui_message("EMPTY SLOT");
+        ui_message("EMPTY SCENE");
         return;
     }
 #if FELUCCA_FLASH
-    if (flash_ok && st_save(OBJ_PROJECT0 + slot, &proj_slot[slot], 0)) {
+    if (flash_ok && st_save(song_scene_obj(song_bank, slot), &proj_slot[slot], 0)) {
         ui_message("ERASE ERROR");
         return;
     }
@@ -574,7 +657,7 @@ static void project_erase(uint32_t slot)
         song_dirty = 1;                                     /* (saved with the settings, when quiet) */
 #endif
     fm1_irq_on();
-    ui_message("ERASED");
+    ui_message("SCENE ERASED");
 }
 
 /* a project into the working one: the transport stops, everything sounding is released */
@@ -597,6 +680,35 @@ static void project_apply(const project_t *p)
     ui.force = 1;
 }
 
+/* An empty SONG must also clear the working sequencer.  Make a normal, valid
+ * project with the power-on sounds and no steps, then use the ordinary load
+ * path so the engine and display state cannot retain a previous SONG. */
+static void project_blank(project_t *p)
+{
+    uint32_t i, k;
+    memset(p, 0, sizeof *p);
+    p->magic = PROJ_MAGIC;
+    p->size = sizeof *p;
+    for (i = 0; i < PROJ_NG; i++) p->g[i] = GP[i].def;
+    p->sel = 0;
+    p->drdly = (uint8_t)GP[G_DRDLY].def;
+    for (i = 0; i < NTRK; i++) {
+        proj_trk_t *t = &p->t[i];
+        uint32_t e = trk_def_engine(i);
+        proj_trk_plain(t);
+        for (k = 0; k < P_COUNT; k++) {
+            const param_desc_t *d = i == TRK_DRUM && k == P_E0 ? &DRUM_KIT_DESC :
+                                    k >= P_E0 && k <= P_E7 ? &ENGINES[e]->edit[k - P_E0] : &TP[k];
+            pt_set(t, k, d->def);
+        }
+        t->engine = (uint8_t)e;
+        t->preset = i < NPART ? 0xFFu : 0u;
+        if (i != TRK_DRUM)
+            for (k = 0; k < NSTEP; k++) t->step[k].time = ST_REST;
+    }
+    p->sum = proj_sum(p);
+}
+
 static void project_load(uint32_t slot)
 {
     project_t *p = &proj_slot[slot & 3u];
@@ -608,11 +720,11 @@ static void project_load(uint32_t slot)
         proj_fetch(slot);
 #endif
     if (!proj_ok(p)) {
-        ui_message("EMPTY SLOT");
+        ui_message("EMPTY SCENE");
         return;
     }
     project_apply(p);
-    ui_message("LOADED");
+    ui_message("LOADED SCENE");
 }
 
 /* ---- the working project, kept in flash by itself: saved when it changed, the transport is stopped,
@@ -714,6 +826,8 @@ static void persist_boot(void)                    /* before settings_init / pane
 {
 #if FELUCCA_ARRANGER
     arr_defaults(&arrangement);
+    song_book_defaults(&song_book);
+    song_bank = 0;
 #endif
 #if FELUCCA_FLASH
     persist_t p;
@@ -778,6 +892,7 @@ static void persist_boot(void)                    /* before settings_init / pane
                 panel = old;
         }
     }
+    song_book_boot();                              /* chooses the scene bank before its four slots are read */
     {   /* projects: fill empty RAM slots from flash, so the slot list is right after power-on. A slot
          * still valid in RAM (a warm reset: an update, UPDATE MODE, a crash) may never have reached
          * flash (a live section stored while playing): marked to be written when quiet */
@@ -786,7 +901,7 @@ static void persist_boot(void)                    /* before settings_init / pane
             if (!proj_ok(&proj_slot[i])) {
                 proj_fetch(i);
             } else {
-                int n = st_load(OBJ_PROJECT0 + i, &proj_tmp, sizeof proj_tmp);
+                int n = st_load(song_scene_obj(song_bank, i), &proj_tmp, sizeof proj_tmp);
                 if (n != (int)sizeof proj_slot[i] || memcmp(&proj_tmp.v6, &proj_slot[i], sizeof proj_slot[i]))
                     sec_dirty |= (uint8_t)(1u << i);
             }
@@ -990,7 +1105,7 @@ static uint32_t project_restore(uint32_t slot, const void *raw, uint32_t n)
     if (song.playing || transport_req)
         return 3;
     if (slot < 4u && !n) {
-        if (!flash_ok || st_save(OBJ_PROJECT0 + slot, raw, 0))
+        if (!flash_ok || st_save(song_scene_obj(song_bank, slot), raw, 0))
             return 4;
         memset(&proj_slot[slot], 0, sizeof proj_slot[slot]);
         sec_dirty &= (uint8_t)~(1u << slot);
@@ -1002,7 +1117,7 @@ static uint32_t project_restore(uint32_t slot, const void *raw, uint32_t n)
         project_apply(&autosave_buf);
         return 0;
     }
-    if (!flash_ok || st_save(OBJ_PROJECT0 + slot, &autosave_buf, sizeof autosave_buf))
+    if (!flash_ok || st_save(song_scene_obj(song_bank, slot), &autosave_buf, sizeof autosave_buf))
         return 4;
     memcpy(&proj_slot[slot], &autosave_buf, sizeof proj_slot[slot]);
     sec_dirty &= (uint8_t)~(1u << slot);
@@ -1013,6 +1128,10 @@ static uint32_t project_restore(uint32_t slot, const void *raw, uint32_t n)
 static void arrangement_save(void)
 {
     if (song.playing || transport_req) { ui_message("STOP BEFORE SAVE"); return; }
+    song_book_sync();
+#if FELUCCA_FLASH
+    if (flash_ok && !song_book_write()) { ui_message("SAVE ERROR"); return; }
+#endif
     settings_save();
 #if FELUCCA_FLASH
     if (flash_ok) {
@@ -1047,7 +1166,7 @@ static void sections_write(void)                        /* the dirty sections an
 #if FELUCCA_FLASH
     if (flash_ok)
         for (i = 0; i < 4u; i++)
-            if (((sec_dirty >> i) & 1u) && st_save(OBJ_PROJECT0 + i, &proj_slot[i], sizeof proj_slot[i]) == 0)
+            if (((sec_dirty >> i) & 1u) && st_save(song_scene_obj(song_bank, i), &proj_slot[i], sizeof proj_slot[i]) == 0)
                 sec_dirty &= (uint8_t)~(1u << i);       /* (a failed write stays dirty: tried again later) */
     if (!flash_ok)
 #endif
@@ -1055,9 +1174,127 @@ static void sections_write(void)                        /* the dirty sections an
     (void)i;
     if (song_dirty) {
         song_dirty = 0;
+        song_book_sync();
+#if FELUCCA_FLASH
+        if (flash_ok && !song_book_write()) {
+            song_dirty = 1;
+            return;
+        }
+#endif
         settings_save();
     }
 }
+#if FELUCCA_ARRANGER
+/* SELECT on the SONG screen.  Scene data is deliberately written before the
+ * bank changes: losing power while changing SONG can at worst leave the old
+ * SONG selected, never point at half-written scenes. */
+static int song_load(uint32_t bank)
+{
+    uint32_t i;
+    int first = -1;
+    bank = clamp(bank, 0, SONG_COUNT - 1u);
+    if (bank == song_bank) return 0;
+    if (song.playing || transport_req) { ui_message("STOP FIRST"); return 0; }
+#if FELUCCA_FLASH
+    if (!flash_ok) { ui_message("SONG IN RAM ONLY"); return 0; }
+    song_book_sync();
+    sections_write();
+    if (sec_dirty) { ui_message("SAVE ERROR"); return 0; }
+    song_bank = (uint8_t)bank;
+    arrangement = song_book.arrangement[song_bank];
+    song_book.active = song_bank;
+    song_book.sum = song_book_sum(&song_book);
+    if (!song_book_write()) { ui_message("SAVE ERROR"); return 0; }
+    for (i = 0; i < ARR_SCENES; i++) {
+        memset(&proj_slot[i], 0, sizeof proj_slot[i]);
+        proj_fetch(i);
+        if (first < 0 && proj_ok(&proj_slot[i])) first = (int)i;
+    }
+    if (first >= 0) {
+        project_apply(&proj_slot[first]);
+        live_sec = (int8_t)first;
+    } else {
+        project_blank(&proj_tmp.v6);
+        project_apply(&proj_tmp.v6);
+        live_sec = -1;
+    }
+    arrangement_clock.running = 0;
+    song_status(song_bank, "LOADED");
+    ui.force = 1;
+    return 1;
+#else
+    (void)i;
+    ui_message("SONG IN RAM ONLY");
+    return 0;
+#endif
+}
+/* Save the active SONG into another numbered SONG.  This is intentionally a
+ * copy, not a switch: SAVE 2 makes a safe duplicate while SONG 1 stays LIVE. */
+static int song_save_as(uint32_t bank)
+{
+    uint32_t i;
+    bank = clamp(bank, 0, SONG_COUNT - 1u);
+    if (song.playing || transport_req) { ui_message("STOP FIRST"); return 0; }
+#if FELUCCA_FLASH
+    if (!flash_ok) { ui_message("SONG IN RAM ONLY"); return 0; }
+    song_book_sync();
+    sections_write();
+    if (sec_dirty) { ui_message("SAVE ERROR"); return 0; }
+    for (i = 0; i < ARR_SCENES; i++)
+        if (st_save(song_scene_obj(bank, i), &proj_slot[i], project_used(i) ? sizeof proj_slot[i] : 0)) {
+            ui_message("SAVE ERROR");
+            return 0;
+        }
+    song_book.arrangement[bank] = arrangement;
+    song_book.saved |= (uint8_t)(1u << bank);
+    if (!song_book_write()) { ui_message("SAVE ERROR"); return 0; }
+    song_status(bank, "SAVED");
+    return 1;
+#else
+    (void)i;
+    ui_message("SONG IN RAM ONLY");
+    return 0;
+#endif
+}
+
+/* Clear a stored SONG back to its power-on state.  Clearing the active SONG
+ * also replaces the working tracks, otherwise an old sequence could remain
+ * audible until another scene was loaded. */
+static int song_clear(uint32_t bank)
+{
+    uint32_t i;
+    bank = clamp(bank, 0, SONG_COUNT - 1u);
+    if (song.playing || transport_req) { ui_message("STOP FIRST"); return 0; }
+#if FELUCCA_FLASH
+    if (!flash_ok) { ui_message("SONG IN RAM ONLY"); return 0; }
+    for (i = 0; i < ARR_SCENES; i++)
+        if (st_save(song_scene_obj(bank, i), &proj_slot[0], 0)) {
+            ui_message("CLEAR ERROR");
+            return 0;
+        }
+    arr_defaults(&song_book.arrangement[bank]);
+    song_book.saved &= (uint8_t)~(1u << bank);
+    if (bank == song_bank) {
+        arrangement = song_book.arrangement[bank];
+        memset(proj_slot, 0, sizeof proj_slot);
+        sec_dirty = 0;
+        song_dirty = 0;
+        project_blank(&proj_tmp.v6);
+        project_apply(&proj_tmp.v6);
+        live_sec = -1;
+        arrangement_clock.running = 0;
+    }
+    song_book.sum = song_book_sum(&song_book);
+    if (!song_book_write()) { ui_message("CLEAR ERROR"); return 0; }
+    song_status(bank, "CLEARED");
+    return 1;
+#else
+    (void)i;
+    ui_message("SONG IN RAM ONLY");
+    return 0;
+#endif
+}
+#endif
 /* before an intentional reset (an update, UPDATE MODE, UBOOT from the host): the audio is stopped, so
  * whatever is only in RAM goes to flash now: the live sections, the song, the working project */
 static void persist_flush_now(void)

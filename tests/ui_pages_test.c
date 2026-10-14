@@ -51,6 +51,7 @@ static struct { uint32_t magic, stage, page, home, ui_frames; } felucca_dbg;
 static int16_t scope_buf[SCOPE_N], scope_bufr[SCOPE_N];
 static uint32_t scope_w;
 #include "../firmware/src/panel.c"
+#include "../firmware/src/icons.c"
 #include "../firmware/src/ui.c"
 static uint32_t saves, loads, erases;
 static int project_used(uint32_t i) { return i < 2; }
@@ -58,6 +59,12 @@ static void project_save(uint32_t i) { (void)i; saves++; ui_message("SAVED"); }
 static void project_load(uint32_t i) { (void)i; loads++; }
 static void project_erase(uint32_t i) { (void)i; erases++; ui_message("ERASED"); }
 static void arrangement_save(void) {}
+static uint8_t test_song = 1;
+static uint32_t song_number(void) { return test_song; }
+static int song_saved(uint32_t n) { return n == 0u; }
+static int song_load(uint32_t n) { test_song = (uint8_t)n + 1u; return 1; }
+static int song_save_as(uint32_t n) { (void)n; return 1; }
+static int song_clear(uint32_t n) { (void)n; return 1; }
 static uint32_t arrangement_ready(void) { return 3; }
 static void arrangement_apply(uint32_t s) { (void)s; }
 static uint32_t section_bars(uint32_t s) { return s == 1u ? 2u : 1u; }   /* (B: two bars) */
@@ -78,7 +85,6 @@ static void up_ui(uint32_t op, uint32_t k) { (void)op; (void)k; }
 static void settings_save(void) {}
 #include "../firmware/src/ui_song.c"
 #include "../firmware/src/ui_studio.c"
-#include "../firmware/src/icons.c"
 #include "../firmware/src/ui_draw.c"
 #include "../firmware/src/ui_vis.c"
 #include "../firmware/src/ui_layers.c"

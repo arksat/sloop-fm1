@@ -16,12 +16,16 @@
 #define ST_PAYLOAD_OFF 256u
 #define ST_PAYLOAD_MAX (ST_SECTOR - ST_PAYLOAD_OFF)
 
-/* flash map (FL_DATA 0x97000..0xDFFFF, FL_GLOB 0xFC000..): settings 0xFC000 / 0xFD000, projects
+/* flash map (FL_DATA 0x97000..0xDFFFF, FL_GLOB 0xFC000..): settings 0xFC000 / 0xFD000, SONG 1's scenes
  * 0x97000..0x9EFFF, user sample slots 0xA0000..0xDBFFF (eng_sample.c), user preset banks 0xDC000..0xDFFFF
  * (upreset.c); the working project (autosave, project.c): copy A 0x9F000, copy B 0xFE000 (the two sectors
  * left: A/B needs no two neighbours); the FM6 patch bank (fm6_bank.c, SLOOP 2.4): 0xE5000 / 0xE6000, the first
- * two sectors of the free 0xE5000..0xFBFFF after the update staging (FL_FM6, fm1_flash.h) */
-enum { OBJ_SETTINGS, OBJ_PROJECT0, OBJ_UPRESET0 = OBJ_PROJECT0 + 4, OBJ_AUTOSAVE = OBJ_UPRESET0 + 2, OBJ_FM6BANK, OBJ_COUNT };
+ * two sectors of the free 0xE5000..0xFBFFF after the update staging (FL_FM6, fm1_flash.h). SONG 2 and SONG 3 use
+ * E7000..F7FFF (four A/B scene pairs each); their order and the selected SONG use F8000 / F9000. */
+enum {
+    OBJ_SETTINGS, OBJ_PROJECT0, OBJ_UPRESET0 = OBJ_PROJECT0 + 4, OBJ_AUTOSAVE = OBJ_UPRESET0 + 2, OBJ_FM6BANK,
+    OBJ_SONG1_SCENE0, OBJ_SONG2_SCENE0 = OBJ_SONG1_SCENE0 + 4, OBJ_SONGBOOK = OBJ_SONG2_SCENE0 + 4, OBJ_COUNT
+};
 
 typedef struct {
     uint32_t magic;
@@ -57,6 +61,12 @@ static uint32_t st_sector(uint32_t obj, uint32_t copy)  /* flash offset of copy 
         return copy ? 0xFE000u : 0x9F000u;
     if (obj == OBJ_FM6BANK)
         return 0xE5000u + copy * ST_SECTOR;
+    if (obj >= OBJ_SONG1_SCENE0 && obj < OBJ_SONG2_SCENE0)
+        return 0xE7000u + (obj - OBJ_SONG1_SCENE0) * 2u * ST_SECTOR + copy * ST_SECTOR;
+    if (obj >= OBJ_SONG2_SCENE0 && obj < OBJ_SONGBOOK)
+        return 0xF0000u + (obj - OBJ_SONG2_SCENE0) * 2u * ST_SECTOR + copy * ST_SECTOR;
+    if (obj == OBJ_SONGBOOK)
+        return 0xF8000u + copy * ST_SECTOR;
     if (obj >= OBJ_UPRESET0 && obj < OBJ_AUTOSAVE)
         return 0xDC000u + (obj - OBJ_UPRESET0) * 2u * ST_SECTOR + copy * ST_SECTOR;
     return 0x97000u + (obj - OBJ_PROJECT0) * 2u * ST_SECTOR + copy * ST_SECTOR;

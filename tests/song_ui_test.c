@@ -31,11 +31,19 @@ static void project_load(uint32_t i) {(void)i;loads++;}
 static void settings_save(void) {}
 static void arrangement_save(void) {order_saves++;}
 static void ui_message(const char *s) {str_cpy(ui.msg,s,sizeof ui.msg);ui.msg_t=40;}
+static void ui_say(const char *a, const char *b) {str_cpy(ui.msg,a,sizeof ui.msg);str_cpy(ui.msg+str_len(ui.msg),b,sizeof ui.msg-str_len(ui.msg));ui.msg_t=40;}
 static void go_home(void) {ui.home=1;}
 static void open_family(uint32_t f) {(void)f;ui.home=1;}
 static int32_t panel_enc(uint32_t i) {int32_t s=enc[i];enc[i]=0;return s;}
 static void song_backup(void) {}
 static void song_restore(void) {}
+static uint8_t test_song = 1;
+static uint32_t song_number(void) { return test_song; }
+static int song_saved(uint32_t n) { return n == 0u; }
+static int song_load(uint32_t n) { test_song = (uint8_t)n + 1u; return 1; }
+static int song_save_as(uint32_t n) { (void)n; return 1; }
+static int song_clear(uint32_t n) { (void)n; return 1; }
+#include "../firmware/src/icons.c"
 #include "../firmware/src/ui_song.c"
 static void press(uint32_t b) {song_screen_input(1u<<panel.btn[b],0);}
 

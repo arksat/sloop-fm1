@@ -33,6 +33,8 @@ static uint32_t cur_btn(void)                      /* the button of the screen s
 {
     if (!ui.home && cur_page()->scope == SC_SONG)
         return B_SAVE;
+    if (!ui.home && cur_page()->scope == SC_SONGMGR)
+        return B_HOME;
     if (!ui.home && cur_page()->scope == SC_DRUM)
         return B_SEQ;
     return FAM_BTN[cur_fam()];
@@ -139,6 +141,14 @@ static uint32_t keys_lit(void)
             m |= 1u << key_of_white(9);
         if (play_led())
             m |= 1u << key_of_white(15);
+        return m;
+    case LY_SONG:                                  /* LOAD is solid; SAVE blinks so the two rows read differently */
+        for (i = 0; i < 4u; i++)
+            m |= 1u << key_of_white(i);
+        if ((fm1_ms / 300u) & 1u)
+            for (i = 4u; i < 8u; i++)
+                m |= 1u << key_of_white(i);
+        m |= 1u << key_of_white(12) | 1u << key_of_white(13) | 1u << key_of_white(15);
         return m;
     case LY_ERASE:                                 /* the sounds the pattern holds (NOTES: dim, the hits lit) */
         return (lights_notes ? 0u : erase_lanes(t)) | fm1_in.notes | (lights_notes ? keys_sounding(t) : 0u);
@@ -266,6 +276,20 @@ static int32_t accel(uint32_t role, int32_t s, int32_t range)
 /* TRACKS page: KNOB 1 SWING (the groove of every track, MPC 50..75 %), 2 LEVEL (0 = mute; the drum
  * track: GLO > DRUMS LEVEL), 3 LEN of its pattern, 4 PAN. A track muted with MUTE (GLO + key, the
  * editor): the first turn of KNOB 2 unmutes it */
+static int16_t steps_choice_turn(int16_t len, int32_t steps)
+{
+    static const int16_t LEN[4] = {16, 32, 48, 64};
+    uint32_t i, best = 0, dist = 0xFFFFFFFFu;
+    for (i = 0; i < 4u; i++) {
+        uint32_t d = (uint32_t)(len > LEN[i] ? len - LEN[i] : LEN[i] - len);
+        if (d < dist) {
+            best = i;
+            dist = d;
+        }
+    }
+    return LEN[clamp((int32_t)best + steps, 0, 3)];
+}
+
 static void tracks_edit(uint32_t slot, int32_t steps)
 {
     track_t *t = TSEL;
@@ -285,9 +309,8 @@ static void tracks_edit(uint32_t slot, int32_t steps)
         d = is_drum(t) ? &GP[G_DRLVL] : &TP[P_LEVEL];
         break;
     case 2:
-        vp = &t->p[P_SLEN];
-        d = &TP[P_SLEN];
-        break;
+        t->p[P_SLEN] = steps_choice_turn(t->p[P_SLEN], steps);
+        return;
     default:
         vp = &t->p[P_PAN];
         d = &TP[P_PAN];
@@ -392,27 +415,27 @@ static void edit_param(uint32_t slot, int32_t steps)
         step_edit(slot, steps);
         return;
     }
-    if (pg->scope == SC_TRK) {
+    if (pg->scope == SC_TRK && pg->fam == FAM_TRK) {
         tracks_edit(slot, steps);
         return;
     }
-    if (pg->graph == GR_BROWSE) {                         /* KNOB 1: one preset, KNOB 2: the next / previous engine */
-        if (slot == 0u && is_drum(TSEL)) {
+    if (pg->graph == GR_BROWSE) {                         /* K1 ENGINE, K2 FAV, K3 CATEGORY, K4 preset number */
+        if (slot == 3u && is_drum(TSEL)) {
             uint32_t total = kit_view_count(), cur = kit_view_pos((uint32_t)TDRUM->p[P_E0]);
             if (total)
                 TDRUM->p[P_E0] = (int16_t)kit_view_at((uint32_t)(((int32_t)cur + steps % (int32_t)total + (int32_t)total) % (int32_t)total));
             ui.force = 1;
-        } else if (slot == 0u && !is_drum(TSEL)) {
+        } else if (slot == 3u && !is_drum(TSEL)) {
             uint32_t total = preset_view_count(), cur, n;
             uint32_t base = preset_pos(&n);
             cur = preset_view_pos(base);
             if (total)
                 preset_go(preset_view_at((uint32_t)(((int32_t)cur + steps % (int32_t)total + (int32_t)total) % (int32_t)total)));
-        } else if (slot == 1u && !is_drum(TSEL)) {
+        } else if (slot == 0u && !is_drum(TSEL)) {
             select_engine((TSEL->eng_req + (steps > 0 ? 1u : NENGINES - 1u)) % NENGINES);
         } else if (slot == 2u && !is_drum(TSEL)) {
             preset_category_turn(steps);
-        } else if (slot == 3u && !is_drum(TSEL) && steps) {
+        } else if (slot == 1u && !is_drum(TSEL) && steps) {
             preset_fav_toggle();
         } else if (slot == 2u && is_drum(TSEL) && steps) {
             ui.pcat = steps > 0 ? PC_FAV : PC_ALL;
@@ -421,7 +444,7 @@ static void edit_param(uint32_t slot, int32_t steps)
             else
                 ui.pcat = PC_ALL;                       /* an empty FAV filter stays useful */
             ui.force = 1;
-        } else if (slot == 3u && is_drum(TSEL) && steps) {
+        } else if (slot == 1u && is_drum(TSEL) && steps) {
             kit_fav_toggle((uint32_t)TDRUM->p[P_E0]);
         }
         return;
@@ -461,8 +484,9 @@ static void edit_param(uint32_t slot, int32_t steps)
     d = page_desc(pg, slot, &vp);
     if (!d || !vp || d->max == d->min)
         return;
-    v = d->names == ESYNC_NAMES || d->names == N_IBITS || d->names == N_IRATE ? names_turn(d, *vp, steps)   /* (a name a detent) */
-                                    : clamp(*vp + accel(EN_K1 + slot, steps, d->max - d->min), d->min, d->max);
+    v = id == P_SLEN ? steps_choice_turn(*vp, steps)
+        : d->names == ESYNC_NAMES || d->names == N_IBITS || d->names == N_IRATE ? names_turn(d, *vp, steps) /* (a name a detent) */
+        : clamp(*vp + accel(EN_K1 + slot, steps, d->max - d->min), d->min, d->max);
     *vp = (int16_t)v;
     if (pg->scope != SC_GLOBAL && p_lockable(id))
         ui.lock_par = (uint8_t)id;                        /* the SEQ layer's lock parameter: the last one touched */
@@ -677,7 +701,7 @@ static void layer_tap(uint32_t layer)
             ui.force = 1;
             break;
         }
-        if (!ui.home && cur_page()->scope == SC_TRK && is_drum(TSEL)) {
+        if (is_drum(TSEL) && (ui.home || cur_page()->scope == SC_TRK)) {
             studio_open(SC_DRUM);
             break;
         }
@@ -946,9 +970,25 @@ static void holds_input(uint32_t pressed, uint32_t now_ms)
 static void ui_input(void)
 {
     uint32_t pressed = fm1_input_edges(0), notes = fm1_input_note_edges(), now = fm1_ticks(), id, b, k;
+    const uint32_t play_key = 1u << 25;                /* F#5, the highest black key: transport shortcut */
+    /* With the arranger enabled, the visible HOME screen is implemented as
+     * TRACKS (ui.home stays false).  Treat both representations alike for
+     * HOME-only shortcuts. */
+    int home_screen = ui.home || (cur_page()->fam == FAM_TRK && cur_page()->scope == SC_TRK);
     uint32_t home = btn_hold(&ui.home_t0, B_HOME, now, 1);
+    uint32_t settings_t0 = ui.settings_t0;
+    uint32_t settings_hold = home_screen ? btn_hold(&ui.settings_t0, B_OCTDN, now, 1) : BT_NONE;
     int32_t s;
     int layered;
+    if (!home_screen)
+        ui.settings_t0 = 0;
+    else if (!settings_t0 && ui.settings_t0)
+        ui.settings_octave = song.octave;              /* restore this if it becomes a long hold */
+    if (notes & play_key)
+        pressed |= 1u << panel.btn[B_PLAY];            /* exactly the panel PLAY/STOP action */
+    notes &= ~play_key;
+    /* Keep its held state for the matrix debouncer.  Clearing fm1_in.notes here
+     * makes the scanner see each held frame as a fresh press. */
     enc_hold = 0;                                       /* (panel.c: every knob readable again this pass) */
     if (pressed || notes)
         ui_input_ms = fm1_ms;
@@ -958,16 +998,49 @@ static void ui_input(void)
     ml_poll();                                          /* MIDI LEARN: a CC came for the picked parameter (2.6) */
     page_fix();                                         /* (a page the track does not have: its neighbour, 2.6) */
     midi_entry();                                       /* (the STEP page's MIDI notes: read every frame, 2.6) */
-    if (home == BT_HOLD) {                              /* HOME held: open the menu, or leave it */
-        if (ui.menu) {
-            menu_close();
-        } else {
+    if (!ui.menu && !ui.home && cur_page()->fam == FAM_TRK &&
+        (fm1_in.buttons & (1u << panel.btn[B_HOME]))) { /* HOME + K3: precise pattern length */
+        s = panel_enc(EN_K3);
+        if (s) {
+            TSEL->p[P_SLEN] = (int16_t)clamp(TSEL->p[P_SLEN] + s, 1, NSTEP);
+            ui.hot_col = 2;
+            ui.hot_t = 40;
+            ui.home_t0 |= 2u;                           /* this HOME press is a modifier, never a menu tap/hold */
+            home = BT_NONE;
+        }
+    }
+    if (!ui.menu && !ui.home && cur_page()->id[0] == P_SLEN &&
+        (fm1_in.buttons & (1u << panel.btn[B_HOME]))) { /* HOME + K1: precise pattern length on SEQ > PATTERN */
+        s = panel_enc(EN_K1);
+        if (s) {
+            TSEL->p[P_SLEN] = (int16_t)clamp(TSEL->p[P_SLEN] + s, 1, NSTEP);
+            ui.hot_col = 0;
+            ui.hot_t = 40;
+            ui.home_t0 |= 2u;
+            home = BT_NONE;
+        }
+    }
+    /* HOME now opens the song arranger.  The settings menu moved to a
+     * deliberate OCT- hold from HOME, keeping both functions easy to reach. */
+    if (home == BT_HOLD) {
+        layer_unlock();
+        ui.confirm = 0;
+        studio_open(SC_SONGMGR);
+        return;
+    }
+    /* OCT- still changes octave immediately (important for both the hardware
+     * and the browser's one-shot button event).  When it becomes a hold, put
+     * the octave back before opening SETTINGS. */
+    if (home_screen) {
+        if (settings_hold == BT_HOLD) {
+            song.octave = ui.settings_octave;
             layer_unlock();
             ui.menu = 1;
             ui.menu_sel = 0;
             ui.confirm = 0;
             ui.force = 1;
             song.seq_mode = 0;
+            return;
         }
     }
     kb_grid = (uint8_t)grid_keys_on();                  /* (seq.c: the keys are the grid's steps) */
@@ -1016,6 +1089,10 @@ static void ui_input(void)
             panel_enc(EN_K1 + k);
     }
 #if FELUCCA_ARRANGER
+    if (on_song_manager()) {
+        song_manager_input(pressed, home);
+        return;
+    }
     if (on_song_page()) {
         song_screen_input(pressed, home);
         return;
